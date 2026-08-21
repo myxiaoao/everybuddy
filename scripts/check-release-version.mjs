@@ -35,7 +35,9 @@ if (mismatches.length > 0) {
   );
 }
 
-const tag = process.argv[2] ?? process.env.GITHUB_REF_NAME;
+const tag =
+  process.argv[2] ??
+  (process.env.GITHUB_REF?.startsWith("refs/tags/") ? process.env.GITHUB_REF_NAME : undefined);
 if (tag && tag !== `v${expected}`) {
   throw new Error(`Release tag ${tag} does not match version v${expected}`);
 }
