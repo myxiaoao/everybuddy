@@ -1,0 +1,319 @@
+@media (hover: hover) {
+  .compact-back:hover {
+    background: var(--color-bg-hover);
+  }
+
+  .gateway-item:not(.is-selected):hover,
+  .model-row:not(.is-active):hover {
+    background: var(--color-bg-hover);
+  }
+
+  .command-stage:not(.is-current):not(:disabled):hover,
+  .model-filter:not(.is-active):hover {
+    color: var(--color-text-primary);
+    background: var(--color-bg-hover);
+  }
+
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  button {
+    transition-property: transform, opacity;
+    transition-duration: 180ms;
+    transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  button:not([data-slot]):active:not(:disabled) {
+    transform: scale(0.96);
+  }
+
+  .capability-toggle__visual-switch > span,
+  .model-config-details__chevron {
+    transition-property: transform;
+    transition-duration: 180ms;
+    transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  .target-option__checkbox svg {
+    transition: opacity 120ms cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  .selection-slot {
+    transition: opacity 180ms cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  .gateway-item {
+    transition-property: background-color, box-shadow;
+    transition-duration: 150ms;
+    transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  .command-stage.is-complete .command-stage__icon {
+    animation: command-confirm 180ms cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  .status-dot.is-pulsing {
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    50% { opacity: 0.35; }
+  }
+
+  @keyframes command-confirm {
+    from { opacity: 0.72; transform: scale(0.88); }
+    to { opacity: 1; transform: scale(1); }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (max-width: 980px) {
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace > * {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .compact-view-gateways .model-panel,
+  .compact-view-gateways .inspector-panel,
+  .compact-view-models .gateway-panel,
+  .compact-view-models .inspector-panel,
+  .compact-view-details .gateway-panel,
+  .compact-view-details .model-panel {
+    display: none;
+  }
+
+  .gateway-panel,
+  .inspector-panel {
+    border: 0;
+  }
+
+  .compact-back {
+    display: inline-flex;
+  }
+
+  .compact-view-gateways .compact-back {
+    display: none;
+  }
+
+  .command-context {
+    gap: var(--space-2);
+  }
+
+  .command-stages {
+    display: none;
+  }
+
+  .command-mobile-context {
+    display: block;
+    min-width: 0;
+  }
+
+  .gateway-panel {
+    padding-inline: clamp(12px, 4vw, 28px);
+  }
+
+  .inspector-content {
+    width: min(100%, 620px);
+    margin-inline: auto;
+  }
+}
+
+@media (max-width: 620px) {
+  .app-shell {
+    grid-template-rows: 54px minmax(0, 1fr);
+  }
+
+  .command-bar {
+    gap: var(--space-2);
+    padding: 6px 8px;
+  }
+
+  .command-actions {
+    gap: 4px;
+  }
+
+  .command-primary__label {
+    display: none;
+  }
+
+  .command-primary__label--compact {
+    display: inline;
+  }
+
+  .command-primary__count {
+    display: none;
+  }
+
+  .model-toolbar {
+    align-items: stretch;
+    padding: var(--space-3);
+  }
+
+  .model-toolbar > div {
+    width: 100%;
+  }
+
+  .model-toolbar__actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .search-field {
+    width: 100%;
+  }
+
+  .model-controlbar {
+    gap: var(--space-2);
+    padding-inline: var(--space-3);
+  }
+
+  .selection-slot {
+    min-width: 92px;
+  }
+
+  .target-option__copy code {
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .model-table__header,
+  .model-row {
+    grid-template-columns: 34px minmax(0, 1fr) 92px;
+    padding-inline: var(--space-3);
+  }
+
+  .model-table__header span:last-child {
+    text-align: end;
+  }
+
+  .capability-icons {
+    gap: 4px;
+  }
+
+  .capability-icons > span {
+    width: 24px;
+    height: 24px;
+  }
+
+  .inspector-heading {
+    min-height: 62px;
+    padding-inline: var(--space-3);
+  }
+
+  .inspector-content {
+    padding-inline: var(--space-3);
+  }
+
+  .onboarding-state {
+    grid-template-columns: 1fr;
+    align-content: center;
+    padding: var(--space-6);
+  }
+
+  .onboarding-rail {
+    grid-template-columns: repeat(3, auto);
+    justify-content: start;
+  }
+
+  .onboarding-rail span::before {
+    width: 12px;
+  }
+
+  [data-slot="dialog-header"] {
+    padding-inline-start: var(--space-4);
+    padding-inline-end: 3.5rem;
+  }
+
+  [data-slot="dialog-footer"],
+  .modal__body {
+    padding-inline: var(--space-4);
+  }
+
+  [data-slot="dialog-footer"] {
+    flex-wrap: wrap;
+  }
+
+  .preview-targets {
+    grid-template-columns: 1fr;
+  }
+
+  .backup-row {
+    grid-template-columns: 20px minmax(0, 1fr);
+  }
+
+  .backup-row [data-slot="button"] {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .segmented-control--three {
+    grid-template-columns: 1fr;
+  }
+
+  .update-banner {
+    inset-inline: 12px;
+    justify-content: space-between;
+    transform: none;
+    white-space: normal;
+  }
+}
+
+@media (min-width: 981px) and (max-width: 1100px) {
+  .manual-model-button span {
+    display: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .model-config-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .effort-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 340px) {
+  .target-option {
+    grid-template-columns: auto 28px minmax(0, 1fr) 16px;
+    gap: 6px;
+    padding-inline: 8px;
+  }
+
+  .target-option__icon {
+    width: 28px;
+    height: 28px;
+  }
+
+}
+
+@media (forced-colors: active) {
+  button:not([data-slot]):focus-visible,
+  input:not([data-slot]):focus-visible,
+  [data-slot="input"]:focus-visible {
+    outline-color: Highlight;
+  }
+
+  .status-dot,
+  .model-row.is-active::before,
+  .gateway-item.is-selected::before,
+  .command-stage.is-complete .command-stage__icon {
+    background: Highlight;
+  }
+}
