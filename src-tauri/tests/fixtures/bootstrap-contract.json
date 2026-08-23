@@ -1,0 +1,20 @@
+{
+  "gateways": [],
+  "models": [],
+  "targets": [],
+  "targetModelStates": [],
+  "importReport": {
+    "importedGatewayCount": 0,
+    "importedModelCount": 0,
+    "issues": []
+  },
+  "settings": {
+    "language": "zh-CN",
+    "theme": "system",
+    "selectedTargets": [],
+    "targetPaths": {
+      "workbuddy": "/home/test/.workbuddy/models.json",
+      "codebuddy": "/home/test/.codebuddy/models.json"
+    }
+  }
+}

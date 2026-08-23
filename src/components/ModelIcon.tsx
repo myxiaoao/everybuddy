@@ -17,7 +17,11 @@ export function ModelIcon({ model }: { model: ModelIdentity }) {
       .toLocaleUpperCase();
 
     return (
-      <span className="vendor-mark" data-model-brand="custom" aria-hidden="true">
+      <span
+        className="vendor-mark"
+        data-model-brand="custom"
+        aria-hidden="true"
+      >
         {fallback}
       </span>
     );
@@ -28,10 +32,16 @@ export function ModelIcon({ model }: { model: ModelIdentity }) {
   } as CSSProperties;
 
   return (
-    <span className="vendor-mark" data-model-brand={match.brand} aria-hidden="true">
-      {match.colored
-        ? <img className="vendor-mark__image" src={match.icon} alt="" />
-        : <span className="vendor-mark__glyph" style={style} />}
+    <span
+      className="vendor-mark"
+      data-model-brand={match.brand}
+      aria-hidden="true"
+    >
+      {match.colored ? (
+        <img className="vendor-mark__image" src={match.icon} alt="" />
+      ) : (
+        <span className="vendor-mark__glyph" style={style} />
+      )}
     </span>
   );
 }

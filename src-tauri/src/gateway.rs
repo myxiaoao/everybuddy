@@ -25,7 +25,7 @@ impl GatewayClient {
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(45))
             .redirect(Policy::none())
-            .user_agent("EveryBuddy/0.1")
+            .user_agent(concat!("EveryBuddy/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|error| CoreError::Network(error.to_string()))?;
         Ok(Self { client })

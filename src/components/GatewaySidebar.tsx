@@ -10,7 +10,11 @@ import {
 import type { GatewayConnectionState, GatewayProfile } from "../types";
 import type { createTranslator } from "../lib/i18n";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import everyBuddyIcon from "@/assets/everybuddy-icon-v6.png";
 
 interface GatewaySidebarProps {
@@ -62,7 +66,14 @@ export function GatewaySidebar({
         </div>
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button variant="ghost" size="icon" type="button" onClick={onAdd} aria-label={t("addGateway")} disabled={refreshing}>
+            <Button
+              variant="ghost"
+              size="icon"
+              type="button"
+              onClick={onAdd}
+              aria-label={t("addGateway")}
+              disabled={refreshing}
+            >
               <Plus aria-hidden="true" size={18} />
             </Button>
           </TooltipTrigger>
@@ -74,10 +85,15 @@ export function GatewaySidebar({
         {gateways.map((gateway) => {
           const selected = gateway.id === selectedId;
           const busy = gateway.id === busyId;
-          const connectionState = busy ? "refreshing" : connectionStates[gateway.id] ?? "idle";
+          const connectionState = busy
+            ? "refreshing"
+            : (connectionStates[gateway.id] ?? "idle");
           const connectionLabel = gatewayConnectionLabel(connectionState, t);
           return (
-            <div className={`gateway-item${selected ? " is-selected" : ""}`} key={gateway.id}>
+            <div
+              className={`gateway-item${selected ? " is-selected" : ""}`}
+              key={gateway.id}
+            >
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
@@ -87,7 +103,11 @@ export function GatewaySidebar({
                     aria-current={selected ? "true" : undefined}
                     aria-label={`${gateway.name}, ${gateway.apiRoot}, ${connectionLabel}`}
                   >
-                    <span className={`status-dot is-${connectionState}${busy ? " is-pulsing" : ""}`} title={connectionLabel} aria-hidden="true" />
+                    <span
+                      className={`status-dot is-${connectionState}${busy ? " is-pulsing" : ""}`}
+                      title={connectionLabel}
+                      aria-hidden="true"
+                    />
                     <span>
                       <strong>{gateway.name}</strong>
                       <small>{gateway.apiRoot}</small>
@@ -95,13 +115,61 @@ export function GatewaySidebar({
                     <ChevronRight aria-hidden="true" size={16} />
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="right"><span className="gateway-url-tooltip">{gateway.apiRoot}</span></TooltipContent>
+                <TooltipContent side="right">
+                  <span className="gateway-url-tooltip">{gateway.apiRoot}</span>
+                </TooltipContent>
               </Tooltip>
               {selected ? (
                 <div className="gateway-item__actions">
-                  <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon-sm" type="button" onClick={() => onRefresh(gateway.id)} aria-label={t("refreshModels")} disabled={refreshing}><RefreshCw aria-hidden="true" size={15} className={busy ? "spin" : undefined} /></Button></TooltipTrigger><TooltipContent>{t("refreshModels")}</TooltipContent></Tooltip>
-                  <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon-sm" type="button" onClick={() => onEdit(gateway)} aria-label={t("editGateway")} disabled={refreshing}><Pencil aria-hidden="true" size={15} /></Button></TooltipTrigger><TooltipContent>{t("editGateway")}</TooltipContent></Tooltip>
-                  <Tooltip><TooltipTrigger asChild><Button variant="destructive" size="icon-sm" type="button" onClick={() => onDelete(gateway)} aria-label={t("remove")} disabled={refreshing}><Trash2 aria-hidden="true" size={15} /></Button></TooltipTrigger><TooltipContent>{t("remove")}</TooltipContent></Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        type="button"
+                        onClick={() => onRefresh(gateway.id)}
+                        aria-label={t("refreshModels")}
+                        disabled={refreshing}
+                      >
+                        <RefreshCw
+                          aria-hidden="true"
+                          size={15}
+                          className={busy ? "spin" : undefined}
+                        />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>{t("refreshModels")}</TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        type="button"
+                        onClick={() => onEdit(gateway)}
+                        aria-label={t("editGateway")}
+                        disabled={refreshing}
+                      >
+                        <Pencil aria-hidden="true" size={15} />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>{t("editGateway")}</TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="destructive"
+                        size="icon-sm"
+                        type="button"
+                        onClick={() => onDelete(gateway)}
+                        aria-label={t("remove")}
+                        disabled={refreshing}
+                      >
+                        <Trash2 aria-hidden="true" size={15} />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>{t("remove")}</TooltipContent>
+                  </Tooltip>
                 </div>
               ) : null}
             </div>
@@ -110,11 +178,21 @@ export function GatewaySidebar({
       </div>
 
       <div className="sidebar-actions">
-        <Button className="sidebar-action-button" variant="secondary" type="button" onClick={onOpenBackups}>
+        <Button
+          className="sidebar-action-button"
+          variant="secondary"
+          type="button"
+          onClick={onOpenBackups}
+        >
           <ArchiveRestore aria-hidden="true" size={17} />
           {t("backups")}
         </Button>
-        <Button className="sidebar-action-button" variant="secondary" type="button" onClick={onOpenSettings}>
+        <Button
+          className="sidebar-action-button"
+          variant="secondary"
+          type="button"
+          onClick={onOpenSettings}
+        >
           <Settings aria-hidden="true" size={17} />
           {t("settings")}
         </Button>
@@ -123,7 +201,10 @@ export function GatewaySidebar({
   );
 }
 
-function gatewayConnectionLabel(state: GatewayConnectionState, t: ReturnType<typeof createTranslator>) {
+function gatewayConnectionLabel(
+  state: GatewayConnectionState,
+  t: ReturnType<typeof createTranslator>,
+) {
   if (state === "refreshing") return t("gatewayRefreshing");
   if (state === "connected") return t("gatewayConnected");
   if (state === "error") return t("gatewayConnectionFailed");

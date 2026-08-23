@@ -19,56 +19,26 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - name: Validate version and tag
         run: node scripts/check-release-version.mjs "${GITHUB_REF_NAME}"
-      - name: Validate required signing inputs
+      - name: Validate tag commit belongs to main
         shell: bash
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
           set -euo pipefail
-          required=(
-            TAURI_SIGNING_PRIVATE_KEY
-            TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-            TAURI_UPDATER_PUBLIC_KEY
-            APPLE_CERTIFICATE
-            APPLE_CERTIFICATE_PASSWORD
-            APPLE_SIGNING_IDENTITY
-            APPLE_ID
-            APPLE_PASSWORD
-            APPLE_TEAM_ID
-            WINDOWS_CERTIFICATE
-            WINDOWS_CERTIFICATE_PASSWORD
-          )
-          missing=()
-          for name in "${required[@]}"; do
-            if [ -z "${!name:-}" ]; then
-              missing+=("$name")
-            fi
-          done
-          if [ "${#missing[@]}" -gt 0 ]; then
-            echo "Missing release secrets or variables: ${missing[*]}" >&2
+          git fetch origin main --no-tags
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Release tag must point to a commit contained in main." >&2
             exit 1
           fi
-          echo "All required release inputs are configured."
-
   build:
-    name: Build and sign (${{ matrix.name }})
+    name: Build unsigned alpha (${{ matrix.name }})
     needs: preflight
+    environment: release
     permissions:
       contents: write
     runs-on: ${{ matrix.os }}
@@ -104,90 +74,56 @@ jobs:
           key: ${{ matrix.target }}
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      - name: Import Apple signing certificate
-        if: runner.os == 'macOS'
+      - name: Validate required signing inputs
         shell: bash
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
         run: |
           set -euo pipefail
-          certificate_path="$RUNNER_TEMP/everybuddy-signing.p12"
-          keychain_path="$RUNNER_TEMP/everybuddy-build.keychain-db"
-          keychain_password="$(openssl rand -hex 24)"
-          printf '%s' "$APPLE_CERTIFICATE" | openssl base64 -d -A > "$certificate_path"
-          security create-keychain -p "$keychain_password" "$keychain_path"
-          security set-keychain-settings -lut 21600 "$keychain_path"
-          security unlock-keychain -p "$keychain_password" "$keychain_path"
-          security list-keychains -d user -s "$keychain_path"
-          security import "$certificate_path" \
-            -k "$keychain_path" \
-            -P "$APPLE_CERTIFICATE_PASSWORD" \
-            -T /usr/bin/codesign \
-            -T /usr/bin/security
-          security set-key-partition-list \
-            -S apple-tool:,apple:,codesign: \
-            -s -k "$keychain_password" "$keychain_path"
-          security find-identity -v -p codesigning "$keychain_path" \
-            | grep -F "$APPLE_SIGNING_IDENTITY" >/dev/null
-          rm -f "$certificate_path"
-          echo "APPLE_KEYCHAIN_PATH=$keychain_path" >> "$GITHUB_ENV"
-
-      - name: Import Windows signing certificate
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $certificatePath = Join-Path $env:RUNNER_TEMP 'everybuddy-signing.pfx'
-          [IO.File]::WriteAllBytes(
-            $certificatePath,
-            [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+          required=(
+            TAURI_SIGNING_PRIVATE_KEY
+            TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+            TAURI_UPDATER_PUBLIC_KEY
           )
-          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
-          $imported = Import-PfxCertificate `
-            -FilePath $certificatePath `
-            -CertStoreLocation Cert:\CurrentUser\My `
-            -Password $password
-          $certificate = @($imported) | Where-Object HasPrivateKey | Select-Object -First 1
-          if (-not $certificate) {
-            throw 'The imported Windows certificate does not include a private key.'
-          }
-          "WINDOWS_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" `
-            | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Remove-Item $certificatePath -Force
+          missing=()
+          for name in "${required[@]}"; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "Missing release secrets or variables: ${missing[*]}" >&2
+            exit 1
+          fi
+          echo "All required release inputs are configured."
 
       - name: Prepare release-only Tauri config
         shell: bash
         env:
           TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
-          WINDOWS_CERTIFICATE_THUMBPRINT: ${{ env.WINDOWS_CERTIFICATE_THUMBPRINT }}
         run: node scripts/prepare-release-config.mjs
 
-      - name: Build signed release assets
+      - name: Build updater-signed unsigned alpha assets
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
         with:
           tagName: v__VERSION__
           releaseName: EveryBuddy v__VERSION__
-          releaseBody: EveryBuddy 0.1 is an alpha release. Review the README before installation.
+          releaseBody: |
+            EveryBuddy 0.1 is an unsigned alpha release for testing.
+            macOS Gatekeeper and Windows SmartScreen may show an unverified publisher warning.
+            Download only from this repository and verify SHA256SUMS.txt before installation.
           releaseDraft: true
-          prerelease: false
+          prerelease: true
           includeUpdaterJson: true
           args: --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json --ci
 
-      - name: Verify macOS signing and notarization
+      - name: Verify macOS bundle output
         if: runner.os == 'macOS'
         shell: bash
         run: |
@@ -195,15 +131,10 @@ jobs:
           bundle_root="src-tauri/target/universal-apple-darwin/release/bundle"
           app_path="$(find "$bundle_root/macos" -maxdepth 1 -name '*.app' -type d -print -quit)"
           test -n "$app_path"
-          codesign --verify --deep --strict --verbose=2 "$app_path"
-          spctl --assess --type execute --verbose=2 "$app_path"
-          xcrun stapler validate "$app_path"
           dmg_path="$(find "$bundle_root/dmg" -maxdepth 1 -name '*.dmg' -type f -print -quit)"
           test -n "$dmg_path"
-          codesign --verify --verbose=2 "$dmg_path"
-          xcrun stapler validate "$dmg_path"
 
-      - name: Verify Windows Authenticode signatures
+      - name: Verify Windows installer output
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -213,29 +144,6 @@ jobs:
             Where-Object { $_.Extension -in '.msi', '.exe' }
           if (-not $installers) {
             throw 'No Windows installers were generated.'
-          }
-          foreach ($installer in $installers) {
-            $signature = Get-AuthenticodeSignature $installer.FullName
-            if ($signature.Status -ne 'Valid') {
-              throw "Invalid Authenticode signature for $($installer.Name): $($signature.Status)"
-            }
-          }
-
-      - name: Remove Apple build keychain
-        if: always() && runner.os == 'macOS'
-        shell: bash
-        run: |
-          if [ -n "${APPLE_KEYCHAIN_PATH:-}" ]; then
-            security delete-keychain "$APPLE_KEYCHAIN_PATH" || true
-          fi
-
-      - name: Remove Windows signing certificate
-        if: always() && runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          if ($env:WINDOWS_CERTIFICATE_THUMBPRINT) {
-            Remove-Item "Cert:\CurrentUser\My\$env:WINDOWS_CERTIFICATE_THUMBPRINT" -Force `
-              -ErrorAction SilentlyContinue
           }
 
   verify-assets:
@@ -263,6 +171,8 @@ jobs:
       - name: Verify updater manifest and signatures
         run: |
           set -euo pipefail
+          test "$(find release-assets -maxdepth 1 -name '*.dmg' -type f | wc -l)" -ge 1
+          test "$(find release-assets -maxdepth 1 \( -name '*.msi' -o -name '*.exe' \) -type f | wc -l)" -ge 1
           test -s release-assets/latest.json
           test "$(find release-assets -maxdepth 1 -name '*.sig' -type f | wc -l)" -ge 2
           node - <<'NODE'

@@ -10,7 +10,9 @@ async function readJson(path) {
 function cargoVersion(source) {
   const match = source.match(/^version\s*=\s*"([^"]+)"/m);
   if (!match) {
-    throw new Error("Could not read the package version from src-tauri/Cargo.toml");
+    throw new Error(
+      "Could not read the package version from src-tauri/Cargo.toml",
+    );
   }
   return match[1];
 }
@@ -37,7 +39,9 @@ if (mismatches.length > 0) {
 
 const tag =
   process.argv[2] ??
-  (process.env.GITHUB_REF?.startsWith("refs/tags/") ? process.env.GITHUB_REF_NAME : undefined);
+  (process.env.GITHUB_REF?.startsWith("refs/tags/")
+    ? process.env.GITHUB_REF_NAME
+    : undefined);
 if (tag && tag !== `v${expected}`) {
   throw new Error(`Release tag ${tag} does not match version v${expected}`);
 }
@@ -45,4 +49,6 @@ if (!changelog.includes(`## [${expected}]`)) {
   throw new Error(`CHANGELOG.md does not contain a ${expected} release entry`);
 }
 
-console.log(`Release versions are aligned at ${expected}${tag ? ` (${tag})` : ""}.`);
+console.log(
+  `Release versions are aligned at ${expected}${tag ? ` (${tag})` : ""}.`,
+);

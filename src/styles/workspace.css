@@ -488,11 +488,14 @@ input[type="checkbox"] {
   box-shadow: 0 1px 3px oklch(0 0 0 / 0.22);
 }
 
-.capability-toggle:has(.capability-toggle__native-input:checked) .capability-toggle__visual-switch {
+.capability-toggle:has(.capability-toggle__native-input:checked)
+  .capability-toggle__visual-switch {
   background: var(--color-accent-solid);
 }
 
-.capability-toggle:has(.capability-toggle__native-input:checked) .capability-toggle__visual-switch > span {
+.capability-toggle:has(.capability-toggle__native-input:checked)
+  .capability-toggle__visual-switch
+  > span {
   transform: translateX(14px);
 }
 
@@ -839,7 +842,11 @@ input[type="checkbox"] {
 .publish-readiness.is-ready {
   color: var(--color-text-primary);
   background: var(--color-accent-soft);
-  border-color: color-mix(in oklab, var(--color-accent-solid) 26%, var(--color-border-subtle));
+  border-color: color-mix(
+    in oklab,
+    var(--color-accent-solid) 26%,
+    var(--color-border-subtle)
+  );
 }
 
 .publish-readiness > svg {

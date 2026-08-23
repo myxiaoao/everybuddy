@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞
+    url: https://github.com/myxiaoao/everybuddy/security/advisories/new
+    about: 请通过 GitHub Security Advisories 私下报告安全漏洞。
+  - name: 使用帮助
+    url: https://github.com/myxiaoao/everybuddy/blob/main/SUPPORT.md
+    about: 提交 Issue 前先查看支持渠道和故障排查说明。

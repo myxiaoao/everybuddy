@@ -52,6 +52,18 @@
   color: var(--color-accent-text);
 }
 
+.crash-state {
+  gap: var(--space-3);
+}
+
+.crash-state h1 {
+  margin-block: var(--space-1) 0;
+}
+
+.crash-state p {
+  margin-block-end: var(--space-2);
+}
+
 .onboarding-state {
   display: grid;
   grid-template-columns: 116px minmax(0, 460px);
@@ -178,6 +190,47 @@
   color: var(--color-text-secondary);
   font-size: var(--text-label);
   font-weight: 600;
+  line-height: var(--leading-ui);
+}
+
+.settings-form .app-information {
+  padding-block-start: var(--space-4);
+  border-block-start: 1px solid var(--color-border-subtle);
+}
+
+.app-information__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.app-version {
+  display: grid;
+  min-width: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-caption);
+  line-height: var(--leading-ui);
+}
+
+.app-version strong {
+  color: var(--color-text-primary);
+  font-size: var(--text-body);
+  font-variant-numeric: tabular-nums;
+}
+
+.app-information__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.update-check-status {
+  min-height: calc(var(--text-caption) * var(--leading-ui));
+  margin-block-start: var(--space-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--text-caption);
   line-height: var(--leading-ui);
 }
 
@@ -355,7 +408,8 @@
   justify-content: space-between;
   gap: var(--space-3);
   padding: 6px 0;
-  border-block-end: 1px solid color-mix(in oklab, var(--color-warning-text) 18%, transparent);
+  border-block-end: 1px solid
+    color-mix(in oklab, var(--color-warning-text) 18%, transparent);
   font-size: var(--text-caption);
   line-height: var(--leading-ui);
 }
@@ -599,7 +653,11 @@
 
 .error-toast small {
   margin-block-start: 5px;
-  color: color-mix(in oklab, var(--color-danger-text) 80%, var(--color-text-primary));
+  color: color-mix(
+    in oklab,
+    var(--color-danger-text) 80%,
+    var(--color-text-primary)
+  );
   font-size: var(--text-caption);
   line-height: var(--leading-body);
   text-wrap: pretty;
@@ -622,5 +680,7 @@
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }

@@ -8,10 +8,14 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "border border-transparent bg-[var(--color-accent-solid)] px-3.5 text-[var(--primary-foreground)] shadow-sm hover:bg-[var(--color-accent-hover)]",
-        secondary: "border border-[var(--color-border-strong)] bg-[var(--color-bg-subtle)] px-3.5 text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]",
-        ghost: "bg-transparent px-2.5 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]",
-        destructive: "bg-[var(--color-danger-soft)] px-3.5 text-[var(--color-danger-text)] hover:opacity-85",
+        default:
+          "border border-transparent bg-[var(--color-accent-solid)] px-3.5 text-[var(--primary-foreground)] shadow-sm hover:bg-[var(--color-accent-hover)]",
+        secondary:
+          "border border-[var(--color-border-strong)] bg-[var(--color-bg-subtle)] px-3.5 text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]",
+        ghost:
+          "bg-transparent px-2.5 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]",
+        destructive:
+          "bg-[var(--color-danger-soft)] px-3.5 text-[var(--color-danger-text)] hover:opacity-85",
       },
       size: {
         default: "h-10",
@@ -24,9 +28,22 @@ const buttonVariants = cva(
   },
 );
 
-function Button({ className, variant, size, asChild = false, ...props }: React.ComponentProps<"button"> & VariantProps<typeof buttonVariants> & { asChild?: boolean }) {
+function Button({
+  className,
+  variant,
+  size,
+  asChild = false,
+  ...props
+}: React.ComponentProps<"button"> &
+  VariantProps<typeof buttonVariants> & { asChild?: boolean }) {
   const Comp = asChild ? Slot : "button";
-  return <Comp data-slot="button" className={cn(buttonVariants({ variant, size, className }))} {...props} />;
+  return (
+    <Comp
+      data-slot="button"
+      className={cn(buttonVariants({ variant, size, className }))}
+      {...props}
+    />
+  );
 }
 
 export { Button };

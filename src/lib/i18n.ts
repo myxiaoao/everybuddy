@@ -26,7 +26,8 @@ const messages = {
     gatewayConnectionFailed: "连接失败",
     addManualModel: "手动添加模型",
     addManualModelShort: "添加模型",
-    manualModelDescription: "添加到 {gateway}，不会发送 API 请求。保存后可继续确认模型能力。",
+    manualModelDescription:
+      "添加到 {gateway}，不会发送 API 请求。保存后可继续确认模型能力。",
     addModel: "添加模型",
     manualModelId: "Model ID",
     manualModelIdHint: "必须与 /chat/completions 请求中的 model 值完全一致。",
@@ -50,14 +51,18 @@ const messages = {
     selectAll: "选择当前列表中的全部模型",
     clearSelection: "清除模型选择",
     selectModel: "选择模型 {name}",
-    selectPartialModel: "模型 {name} 已存在于 {targets}，选择后发布到全部当前目标",
+    selectPartialModel:
+      "模型 {name} 已存在于 {targets}，选择后发布到全部当前目标",
     modelPresentInTargets: "已存在于 {targets}；选择后发布到全部当前目标。",
     noGatewayTitle: "添加第一个 API 接口",
-    noGatewayBody: "输入 OpenAI-compatible API 地址和 Token，EveryBuddy 将读取 /v1/models。",
+    noGatewayBody:
+      "输入 OpenAI-compatible API 地址和 Token，EveryBuddy 将读取 /v1/models。",
     noModelsTitle: "尚未发现模型",
-    noModelsBody: "刷新当前 API 接口以获取可用模型。发现操作不会产生模型 Token 消耗。",
+    noModelsBody:
+      "刷新当前 API 接口以获取可用模型。发现操作不会产生模型 Token 消耗。",
     noMatchingModelsTitle: "没有匹配的模型",
-    noMatchingModelsBody: "当前条件“{query}”没有匹配结果。清除筛选后查看全部模型。",
+    noMatchingModelsBody:
+      "当前条件“{query}”没有匹配结果。清除筛选后查看全部模型。",
     activeCapabilityFilter: "能力筛选",
     clearFilters: "清除筛选",
     selectedCount: "已选择 {count} 个",
@@ -118,7 +123,8 @@ const messages = {
     modelConfigSaved: "模型配置已保存",
     probe: "主动 Probe",
     probeTitle: "执行能力 Probe",
-    probeBody: "将向 /v1/chat/completions 发送 3 个最小请求，分别检查工具调用、图片输入和推理模式。请求可能产生少量 Token 费用。",
+    probeBody:
+      "将向 /v1/chat/completions 发送 3 个最小请求，分别检查工具调用、图片输入和推理模式。请求可能产生少量 Token 费用。",
     runProbe: "执行 3 个请求",
     targets: "发布目标",
     targetReady: "可发布",
@@ -130,7 +136,8 @@ const messages = {
     publishScope: "{models} 个模型 → {targets} 个目标",
     publishHint: "发布前将逐目标预览配置差异。",
     publishTitle: "确认配置变更",
-    publishTokenWarning: "目标应用要求将 Token 明文写入本机 models.json。文件会使用当前用户专属权限。",
+    publishTokenWarning:
+      "目标应用要求将 Token 明文写入本机 models.json。文件会使用当前用户专属权限。",
     additions: "新增 {count}",
     updates: "更新 {count}",
     unchanged: "不变 {count}",
@@ -155,8 +162,10 @@ const messages = {
     importIssueAmbiguousModel: "存在多个匹配的本地模型，无法确定来源。",
     importIssueAmbiguousGateway: "存在多个候选 API，无法安全匹配凭据。",
     importIssueCredentialImportFailed: "Token 无法保存到系统凭据库。",
-    importIssueCredentialUnavailable: "系统凭据库暂时不可用，未自动匹配此 API。",
-    importIssueTargetConflict: "与 WorkBuddy 参数不一致，已保留 WorkBuddy 导入结果。",
+    importIssueCredentialUnavailable:
+      "系统凭据库暂时不可用，未自动匹配此 API。",
+    importIssueTargetConflict:
+      "与 WorkBuddy 参数不一致，已保留 WorkBuddy 导入结果。",
     importIssueModelConflict: "本地同名模型使用了不同的接口地址。",
     importIssueUnknown: "此配置项未自动导入。",
     publishFailed: "发布未完成，请检查逐目标结果。",
@@ -171,6 +180,15 @@ const messages = {
     themeLight: "浅色",
     themeDark: "深色",
     targetPaths: "配置文件路径",
+    appInformation: "应用信息",
+    currentVersion: "当前版本",
+    checkForUpdates: "检查更新",
+    checkingForUpdates: "正在检查更新",
+    latestVersion: "当前已是最新版本",
+    latestPrereleaseVersion:
+      "当前更新通道未发现新版本。预发布版本请通过 GitHub Releases 获取更新。",
+    updateCheckFailed: "检查更新失败，请稍后重试。",
+    updateDesktopRequired: "请在 EveryBuddy 桌面应用中检查更新。",
     backups: "备份与恢复",
     noBackups: "尚无配置备份",
     restore: "恢复",
@@ -187,11 +205,13 @@ const messages = {
     back: "返回",
     connectionError: "无法完成请求",
     deleteGatewayTitle: "移除 API 接口",
-    deleteGatewayConfirm: "移除“{name}”及其本地模型记录。已发布到目标应用的配置不会被删除。",
+    deleteGatewayConfirm:
+      "移除“{name}”及其本地模型记录。已发布到目标应用的配置不会被删除。",
     deleteGatewayAction: "移除 API",
     gatewayRemoved: "已移除 API {name}",
     discardChangesTitle: "丢弃未保存的更改",
-    discardChangesBody: "模型“{name}”的能力或高级配置尚未保存。继续后这些更改将丢失。",
+    discardChangesBody:
+      "模型“{name}”的能力或高级配置尚未保存。继续后这些更改将丢失。",
     discardChangesAction: "丢弃更改",
     errorAuthenticationTitle: "身份验证失败",
     errorAuthenticationMessage: "API 拒绝了当前 Token。",
@@ -239,7 +259,8 @@ const messages = {
     gatewayName: "Name",
     gatewayUrl: "API Base URL",
     gatewayToken: "Token key",
-    gatewayTokenHint: "The token stays in your system credential store and is hidden by default.",
+    gatewayTokenHint:
+      "The token stays in your system credential store and is hidden by default.",
     showToken: "Show token",
     hideToken: "Hide token",
     saveAndDiscover: "Save and discover",
@@ -254,14 +275,16 @@ const messages = {
     gatewayConnectionFailed: "Connection failed",
     addManualModel: "Add model manually",
     addManualModelShort: "Add model",
-    manualModelDescription: "Add this model to {gateway} without sending an API request. You can confirm its capabilities next.",
+    manualModelDescription:
+      "Add this model to {gateway} without sending an API request. You can confirm its capabilities next.",
     addModel: "Add model",
     manualModelId: "Model ID",
     manualModelIdHint: "Enter the exact model value used by /chat/completions.",
     manualModelName: "Display name (optional)",
     manualModelNamePlaceholder: "Defaults to the Model ID",
     manualModelVendor: "Vendor (optional)",
-    manualModelVendorPlaceholder: "Detected automatically, or custom when unknown",
+    manualModelVendorPlaceholder:
+      "Detected automatically, or custom when unknown",
     manualModelBadge: "Manual",
     importedModelBadge: "Imported",
     manualModelAdded: "Added model {name}",
@@ -278,20 +301,26 @@ const messages = {
     selectAll: "Select all models in the current list",
     clearSelection: "Clear model selection",
     selectModel: "Select model {name}",
-    selectPartialModel: "Model {name} exists in {targets}; select it to publish to every current target",
-    modelPresentInTargets: "Already in {targets}. Select to publish to every current target.",
+    selectPartialModel:
+      "Model {name} exists in {targets}; select it to publish to every current target",
+    modelPresentInTargets:
+      "Already in {targets}. Select to publish to every current target.",
     noGatewayTitle: "Add your first API gateway",
-    noGatewayBody: "Enter an OpenAI-compatible API URL and token. EveryBuddy reads /v1/models.",
+    noGatewayBody:
+      "Enter an OpenAI-compatible API URL and token. EveryBuddy reads /v1/models.",
     noModelsTitle: "No models discovered",
-    noModelsBody: "Refresh this gateway to load models. Discovery does not consume model tokens.",
+    noModelsBody:
+      "Refresh this gateway to load models. Discovery does not consume model tokens.",
     noMatchingModelsTitle: "No matching models",
-    noMatchingModelsBody: "No models match “{query}”. Clear filters to view all models.",
+    noMatchingModelsBody:
+      "No models match “{query}”. Clear filters to view all models.",
     activeCapabilityFilter: "capability filter",
     clearFilters: "Clear filters",
     selectedCount: "{count} selected",
     details: "Capabilities and targets",
     selectModelTitle: "Select a model to inspect capabilities",
-    selectModelBody: "You can publish multiple models at once. Capability edits apply to the highlighted model.",
+    selectModelBody:
+      "You can publish multiple models at once. Capability edits apply to the highlighted model.",
     capabilities: "Model capabilities",
     toolCall: "Tool Call",
     images: "Vision",
@@ -311,26 +340,31 @@ const messages = {
     modelDisplayName: "Display name",
     invocationConfig: "Invocation parameters",
     endpointOverride: "Endpoint override (optional)",
-    endpointOverrideHint: "Leave blank to use the current API profile Base URL.",
+    endpointOverrideHint:
+      "Leave blank to use the current API profile Base URL.",
     endpointOverridePlaceholder: "Use API profile endpoint",
     maxInputTokens: "Max input tokens",
     maxOutputTokens: "Max output tokens",
     providerDefaultPlaceholder: "Use provider default",
     temperature: "Temperature",
     customProtocol: "Custom protocol",
-    customProtocolHint: "Use the endpoint as-is without appending /chat/completions.",
+    customProtocolHint:
+      "Use the endpoint as-is without appending /chat/completions.",
     reasoningConfig: "Reasoning configuration",
     onlyReasoning: "Reasoning only",
-    onlyReasoningHint: "Do not show an option for disabling reasoning in the model selector.",
+    onlyReasoningHint:
+      "Do not show an option for disabling reasoning in the model selector.",
     canDisableThinking: "Allow disabling reasoning",
-    canDisableThinkingHint: "When disabled, the model selector always uses reasoning mode.",
+    canDisableThinkingHint:
+      "When disabled, the model selector always uses reasoning mode.",
     supportedEfforts: "Supported reasoning efforts",
     defaultEffort: "Default effort",
     legacyEffort: "Legacy effort",
     automatic: "Automatic",
     notSet: "Not set",
     reasoningSummary: "Reasoning summary",
-    reasoningSummaryHint: "This field has two compatible enum sets. Match the value to your endpoint behavior.",
+    reasoningSummaryHint:
+      "This field has two compatible enum sets. Match the value to your endpoint behavior.",
     effort_minimal: "Minimal",
     effort_low: "Low",
     effort_medium: "Medium",
@@ -346,7 +380,8 @@ const messages = {
     modelConfigSaved: "Model configuration saved",
     probe: "Active probe",
     probeTitle: "Run capability probe",
-    probeBody: "EveryBuddy will send 3 minimal /v1/chat/completions requests for Tool Call, Vision, and Reasoning. These requests may consume a small number of tokens.",
+    probeBody:
+      "EveryBuddy will send 3 minimal /v1/chat/completions requests for Tool Call, Vision, and Reasoning. These requests may consume a small number of tokens.",
     runProbe: "Run 3 requests",
     targets: "Publish targets",
     targetReady: "Ready",
@@ -358,40 +393,56 @@ const messages = {
     publishScope: "{models} models → {targets} targets",
     publishHint: "Review changes for each target before publishing.",
     publishTitle: "Review configuration changes",
-    publishTokenWarning: "Target apps require the token in the local models.json file. EveryBuddy restricts the file to the current user.",
+    publishTokenWarning:
+      "Target apps require the token in the local models.json file. EveryBuddy restricts the file to the current user.",
     additions: "Add {count}",
     updates: "Update {count}",
     unchanged: "Unchanged {count}",
     conflicts: "Model ID conflicts",
-    acceptConflicts: "I confirm replacing these models with the current API source",
+    acceptConflicts:
+      "I confirm replacing these models with the current API source",
     confirmPublish: "Publish to {count} targets",
     published: "Model configuration published",
-    importSucceeded: "Imported {gateways} APIs and {models} models from target configuration.",
+    importSucceeded:
+      "Imported {gateways} APIs and {models} models from target configuration.",
     importNoticeTitle: "Startup import needs attention",
     importNoticeSuccessTitle: "Target configuration restored",
-    importNoticeSummary: "{count} configuration items were skipped or differ between targets.",
+    importNoticeSummary:
+      "{count} configuration items were skipped or differ between targets.",
     viewImportDetails: "View details",
     hideImportDetails: "Hide details",
     dismissImportNotice: "Dismiss startup import summary",
-    importIssueTargetReadFailed: "The configuration file could not be read or parsed.",
+    importIssueTargetReadFailed:
+      "The configuration file could not be read or parsed.",
     importIssueMissingModelId: "The Model ID is missing.",
     importIssueMissingUrl: "The API URL is missing.",
     importIssueInvalidUrl: "The API URL is invalid.",
     importIssueMissingToken: "The token is missing.",
     importIssueInvalidParameters: "The model parameters are invalid.",
-    importIssueCustomProtocol: "Custom protocol models cannot be imported automatically.",
-    importIssueAmbiguousModel: "Multiple local models match, so the source is ambiguous.",
-    importIssueAmbiguousGateway: "Multiple API candidates exist, so the credential cannot be matched safely.",
-    importIssueCredentialImportFailed: "The token could not be saved to the system credential store.",
-    importIssueCredentialUnavailable: "The system credential store is unavailable, so this API was not matched automatically.",
-    importIssueTargetConflict: "Parameters differ from WorkBuddy, so the WorkBuddy import was kept.",
-    importIssueModelConflict: "A local model with this ID uses a different endpoint.",
-    importIssueUnknown: "This configuration item was not imported automatically.",
+    importIssueCustomProtocol:
+      "Custom protocol models cannot be imported automatically.",
+    importIssueAmbiguousModel:
+      "Multiple local models match, so the source is ambiguous.",
+    importIssueAmbiguousGateway:
+      "Multiple API candidates exist, so the credential cannot be matched safely.",
+    importIssueCredentialImportFailed:
+      "The token could not be saved to the system credential store.",
+    importIssueCredentialUnavailable:
+      "The system credential store is unavailable, so this API was not matched automatically.",
+    importIssueTargetConflict:
+      "Parameters differ from WorkBuddy, so the WorkBuddy import was kept.",
+    importIssueModelConflict:
+      "A local model with this ID uses a different endpoint.",
+    importIssueUnknown:
+      "This configuration item was not imported automatically.",
     publishFailed: "Publishing did not complete. Review each target result.",
     publishResultSuccess: "Configuration written and verified.",
-    publishResultFailure: "Writing failed. Check the target path and permissions, then try again.",
-    publishResultRolledBack: "Another target failed, so the previous configuration was restored.",
-    publishResultRollbackFailed: "Publishing and rollback failed. Inspect the target configuration immediately.",
+    publishResultFailure:
+      "Writing failed. Check the target path and permissions, then try again.",
+    publishResultRolledBack:
+      "Another target failed, so the previous configuration was restored.",
+    publishResultRollbackFailed:
+      "Publishing and rollback failed. Inspect the target configuration immediately.",
     settings: "Settings",
     language: "Interface language",
     theme: "Appearance",
@@ -399,11 +450,21 @@ const messages = {
     themeLight: "Light",
     themeDark: "Dark",
     targetPaths: "Configuration paths",
+    appInformation: "App information",
+    currentVersion: "Current version",
+    checkForUpdates: "Check for updates",
+    checkingForUpdates: "Checking for updates",
+    latestVersion: "You're using the latest version",
+    latestPrereleaseVersion:
+      "No update was found in this channel. Get prerelease updates from GitHub Releases.",
+    updateCheckFailed: "Couldn't check for updates. Try again later.",
+    updateDesktopRequired: "Check for updates in the EveryBuddy desktop app.",
     backups: "Backups and restore",
     noBackups: "No configuration backups yet",
     restore: "Restore",
     restoreBackupTitle: "Restore configuration backup",
-    restoreConfirm: "Restore {target} to the backup from {date}. The current configuration will be backed up first.",
+    restoreConfirm:
+      "Restore {target} to the backup from {date}. The current configuration will be backed up first.",
     restoreBackupAction: "Restore backup",
     loading: "Loading local configuration",
     desktopRequired: "Open this interface in the EveryBuddy desktop app.",
@@ -415,41 +476,57 @@ const messages = {
     back: "Back",
     connectionError: "Request could not be completed",
     deleteGatewayTitle: "Remove API gateway",
-    deleteGatewayConfirm: "Remove “{name}” and its local model records. Published target configuration will remain unchanged.",
+    deleteGatewayConfirm:
+      "Remove “{name}” and its local model records. Published target configuration will remain unchanged.",
     deleteGatewayAction: "Remove API",
     gatewayRemoved: "Removed API {name}",
     discardChangesTitle: "Discard unsaved changes",
-    discardChangesBody: "Capabilities or advanced settings for “{name}” have not been saved. Continuing will discard them.",
+    discardChangesBody:
+      "Capabilities or advanced settings for “{name}” have not been saved. Continuing will discard them.",
     discardChangesAction: "Discard changes",
     errorAuthenticationTitle: "Authentication failed",
     errorAuthenticationMessage: "The API rejected the current token.",
-    errorAuthenticationRecovery: "Edit the API, verify the token, and try again.",
+    errorAuthenticationRecovery:
+      "Edit the API, verify the token, and try again.",
     errorNetworkTitle: "Connection failed",
     errorNetworkMessage: "EveryBuddy could not reach the API endpoint.",
-    errorNetworkRecovery: "Check the API Base URL, network connection, and service status, then try again.",
+    errorNetworkRecovery:
+      "Check the API Base URL, network connection, and service status, then try again.",
     errorProtocolTitle: "Incompatible response",
     errorProtocolMessage: "The API response is not OpenAI-compatible.",
-    errorProtocolRecovery: "Confirm the endpoint supports /v1/models and /v1/chat/completions.",
+    errorProtocolRecovery:
+      "Confirm the endpoint supports /v1/models and /v1/chat/completions.",
     errorTargetTitle: "Target configuration unavailable",
-    errorTargetMessage: "EveryBuddy could not read or write the target configuration.",
-    errorTargetRecovery: "Check the configuration path and file permissions in Settings, then try again.",
+    errorTargetMessage:
+      "EveryBuddy could not read or write the target configuration.",
+    errorTargetRecovery:
+      "Check the configuration path and file permissions in Settings, then try again.",
     errorDriftTitle: "Target configuration changed",
-    errorDriftMessage: "Another process modified the target configuration after the preview.",
-    errorDriftRecovery: "Reload target status and preview the publish operation again.",
+    errorDriftMessage:
+      "Another process modified the target configuration after the preview.",
+    errorDriftRecovery:
+      "Reload target status and preview the publish operation again.",
     errorConflictTitle: "Model conflict detected",
-    errorConflictMessage: "The target already contains a configuration with the same Model ID.",
-    errorConflictRecovery: "Return to the publish preview and confirm each conflict before publishing.",
+    errorConflictMessage:
+      "The target already contains a configuration with the same Model ID.",
+    errorConflictRecovery:
+      "Return to the publish preview and confirm each conflict before publishing.",
     errorSecretTitle: "Token unavailable",
-    errorSecretMessage: "The system credential store did not return this API token.",
+    errorSecretMessage:
+      "The system credential store did not return this API token.",
     errorSecretRecovery: "Edit the API, save the token again, and retry.",
     errorStorageTitle: "Local storage unavailable",
     errorStorageMessage: "EveryBuddy could not read or write local data.",
-    errorStorageRecovery: "Check available disk space and current-user permissions, then try again.",
+    errorStorageRecovery:
+      "Check available disk space and current-user permissions, then try again.",
     errorValidationTitle: "Current input cannot be submitted",
-    errorValidationMessage: "The current input or selection does not meet the operation requirements.",
-    errorValidationRecovery: "Check required fields, selected models, and publish targets, then try again.",
+    errorValidationMessage:
+      "The current input or selection does not meet the operation requirements.",
+    errorValidationRecovery:
+      "Check required fields, selected models, and publish targets, then try again.",
     errorUnexpectedMessage: "The operation could not be completed.",
-    errorUnexpectedRecovery: "Dismiss this message and try again. Reopen the app if the problem continues.",
+    errorUnexpectedRecovery:
+      "Dismiss this message and try again. Reopen the app if the problem continues.",
     unknown: "Unknown",
     source: "Source",
     modelId: "Model ID",

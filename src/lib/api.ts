@@ -20,7 +20,8 @@ import type {
   TargetStatus,
 } from "../types";
 
-const demoEnabled = !isTauri() && new URLSearchParams(window.location.search).has("demo");
+const demoEnabled =
+  !isTauri() && new URLSearchParams(window.location.search).has("demo");
 
 export const api = {
   bootstrap: () => call<BootstrapData>("bootstrap"),
@@ -37,7 +38,8 @@ export const api = {
   updateModel: (input: ModelUpdateInput) =>
     call<ManagedModel>("update_model", { input }),
   getTargetStatuses: () => call<TargetStatus[]>("get_target_statuses"),
-  getTargetModelStates: () => call<TargetModelState[]>("get_target_model_states"),
+  getTargetModelStates: () =>
+    call<TargetModelState[]>("get_target_model_states"),
   preparePublish: (request: PreparePublishRequest) =>
     call<PublishPreview>("prepare_publish", { request }),
   executePublish: (
@@ -62,7 +64,10 @@ export const api = {
     call<AppSettings>("save_settings", { input: settings }),
 };
 
-async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+async function call<T>(
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
   try {
     if (demoEnabled) {
       return (await demoCall(command, args)) as T;
@@ -70,7 +75,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     if (!isTauri()) {
       throw {
         code: "DESKTOP_REQUIRED",
-        message: "Open EveryBuddy as a desktop app, or append ?demo=1 for the UI demo.",
+        message:
+          "Open EveryBuddy as a desktop app, or append ?demo=1 for the UI demo.",
       } satisfies AppError;
     }
     return await invoke<T>(command, args);
@@ -123,12 +129,66 @@ const demoTokens = new Map<string, string>([
 ]);
 
 let demoModels: ManagedModel[] = [
-  createDemoModel(demoGateway.id, "gpt-5.6", "GPT-5.6", "openai", true, true, true, "imported"),
-  createDemoModel(demoGateway.id, "claude-sonnet-4-5", "Claude Sonnet 4.5", "anthropic", true, true, false, "catalog"),
-  createDemoModel(demoGateway.id, "deepseek-r1", "DeepSeek R1", "deepseek", false, false, true, "catalog"),
-  createDemoModel(demoGateway.id, "qwen3-coder", "Qwen3 Coder", "qwen", true, false, false, "probe"),
-  createDemoModel(demoRelay.id, "glm-4.5", "GLM 4.5", "zhipu", true, false, true, "metadata"),
-  createDemoModel(demoRelay.id, "moonshot-v1", "Moonshot V1", "moonshot", true, true, false, "metadata"),
+  createDemoModel(
+    demoGateway.id,
+    "gpt-5.6",
+    "GPT-5.6",
+    "openai",
+    true,
+    true,
+    true,
+    "imported",
+  ),
+  createDemoModel(
+    demoGateway.id,
+    "claude-sonnet-4-5",
+    "Claude Sonnet 4.5",
+    "anthropic",
+    true,
+    true,
+    false,
+    "catalog",
+  ),
+  createDemoModel(
+    demoGateway.id,
+    "deepseek-r1",
+    "DeepSeek R1",
+    "deepseek",
+    false,
+    false,
+    true,
+    "catalog",
+  ),
+  createDemoModel(
+    demoGateway.id,
+    "qwen3-coder",
+    "Qwen3 Coder",
+    "qwen",
+    true,
+    false,
+    false,
+    "probe",
+  ),
+  createDemoModel(
+    demoRelay.id,
+    "glm-4.5",
+    "GLM 4.5",
+    "zhipu",
+    true,
+    false,
+    true,
+    "metadata",
+  ),
+  createDemoModel(
+    demoRelay.id,
+    "moonshot-v1",
+    "Moonshot V1",
+    "moonshot",
+    true,
+    true,
+    false,
+    "metadata",
+  ),
 ];
 
 let demoSettings: AppSettings = {
@@ -172,7 +232,10 @@ let demoTargetModelStates: TargetModelState[] = [
   {
     target: "workbuddy",
     fingerprint: "demo-workbuddy",
-    matchedModelKeys: ["demo-gateway::gpt-5.6", "demo-gateway::claude-sonnet-4-5"],
+    matchedModelKeys: [
+      "demo-gateway::gpt-5.6",
+      "demo-gateway::claude-sonnet-4-5",
+    ],
     unmatchedCount: 0,
     skippedCount: 0,
   },
@@ -198,7 +261,10 @@ const demoImportReport: TargetImportReport = {
   ],
 };
 
-async function demoCall(command: string, args?: Record<string, unknown>): Promise<unknown> {
+async function demoCall(
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<unknown> {
   await new Promise((resolve) => window.setTimeout(resolve, 180));
   switch (command) {
     case "bootstrap":
@@ -222,7 +288,9 @@ async function demoCall(command: string, args?: Record<string, unknown>): Promis
         updatedAt: now,
       };
       demoGateways = existing
-        ? demoGateways.map((gateway) => gateway.id === profile.id ? profile : gateway)
+        ? demoGateways.map((gateway) =>
+            gateway.id === profile.id ? profile : gateway,
+          )
         : [...demoGateways, profile];
       demoTokens.set(profile.id, input.token);
       return profile;
@@ -231,7 +299,11 @@ async function demoCall(command: string, args?: Record<string, unknown>): Promis
       const id = String((args as { id: string }).id);
       const token = demoTokens.get(id);
       if (!token) {
-        throw { code: "SECRET_STORE_ERROR", message: "The gateway token is missing from the system credential store" } satisfies AppError;
+        throw {
+          code: "SECRET_STORE_ERROR",
+          message:
+            "The gateway token is missing from the system credential store",
+        } satisfies AppError;
       }
       return token;
     }
@@ -250,8 +322,16 @@ async function demoCall(command: string, args?: Record<string, unknown>): Promis
     }
     case "add_manual_model": {
       const input = (args as { input: ManualModelInput }).input;
-      if (demoModels.some((model) => model.gatewayId === input.gatewayId && model.id === input.id.trim())) {
-        throw { code: "VALIDATION", message: "This model ID already exists in the selected API source" } satisfies AppError;
+      if (
+        demoModels.some(
+          (model) =>
+            model.gatewayId === input.gatewayId && model.id === input.id.trim(),
+        )
+      ) {
+        throw {
+          code: "VALIDATION",
+          message: "This model ID already exists in the selected API source",
+        } satisfies AppError;
       }
       const model = createDemoManualModel(input);
       demoModels = [...demoModels, model];
@@ -259,7 +339,8 @@ async function demoCall(command: string, args?: Record<string, unknown>): Promis
     }
     case "probe_model": {
       const key = String((args as { modelKey: string }).modelKey);
-      const model = demoModels.find((item) => item.key === key) ?? demoModels[0];
+      const model =
+        demoModels.find((item) => item.key === key) ?? demoModels[0];
       return { model, requestCount: 3, notes: [] } satisfies ProbeSummary;
     }
     case "update_model": {
@@ -302,10 +383,19 @@ async function demoCall(command: string, args?: Record<string, unknown>): Promis
     }
     case "execute_publish": {
       const request = (args as { request: PreparePublishRequest }).request;
-      const publishedKeys = request.modelIds.map((id) => `${request.gatewayId}::${id}`);
-      demoTargetModelStates = demoTargetModelStates.map((state) => request.targets.includes(state.target)
-        ? { ...state, matchedModelKeys: [...new Set([...state.matchedModelKeys, ...publishedKeys])] }
-        : state);
+      const publishedKeys = request.modelIds.map(
+        (id) => `${request.gatewayId}::${id}`,
+      );
+      demoTargetModelStates = demoTargetModelStates.map((state) =>
+        request.targets.includes(state.target)
+          ? {
+              ...state,
+              matchedModelKeys: [
+                ...new Set([...state.matchedModelKeys, ...publishedKeys]),
+              ],
+            }
+          : state,
+      );
       return {
         success: true,
         results: request.targets.map((target) => ({
@@ -380,7 +470,8 @@ function createDemoModel(
         capability: "toolCall",
         value: supportsToolCall,
         source,
-        detail: source === "probe" ? "Tool call returned" : "Known model metadata",
+        detail:
+          source === "probe" ? "Tool call returned" : "Known model metadata",
         checkedAt: now,
       },
       {
@@ -398,9 +489,10 @@ function createDemoModel(
         checkedAt: now,
       },
     ],
-    metadata: source === "imported"
-      ? { id, owned_by: vendor, everybuddySource: "targetImport" }
-      : { id, owned_by: vendor },
+    metadata:
+      source === "imported"
+        ? { id, owned_by: vendor, everybuddySource: "targetImport" }
+        : { id, owned_by: vendor },
     updatedAt: now,
   };
 }
@@ -422,7 +514,10 @@ function createDemoManualModel(input: ManualModelInput): ManagedModel {
     supportsReasoning,
     "catalog",
   );
-  return { ...model, metadata: { id, owned_by: vendor, everybuddySource: "manual" } };
+  return {
+    ...model,
+    metadata: { id, owned_by: vendor, everybuddySource: "manual" },
+  };
 }
 
 function inferDemoVendor(id: string) {

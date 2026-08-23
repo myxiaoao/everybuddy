@@ -150,12 +150,12 @@ Preview Dialog 分目标显示路径、新增、更新和不变数量。存在�
 
 ### 圆角
 
-| Token | 值 | 用途 |
-| --- | --- | --- |
-| `--radius-xs` | `3px` | 状态和能力图标 |
-| `--radius-sm` | `6px` | Button、Input、列表选择 |
-| `--radius-md` | `8px` | Dialog 和主要 Surface |
-| `--radius-lg` | `12px` | 独立大 Surface |
+| Token         | 值     | 用途                    |
+| ------------- | ------ | ----------------------- |
+| `--radius-xs` | `3px`  | 状态和能力图标          |
+| `--radius-sm` | `6px`  | Button、Input、列表选择 |
+| `--radius-md` | `8px`  | Dialog 和主要 Surface   |
+| `--radius-lg` | `12px` | 独立大 Surface          |
 
 ### 颜色角色
 
@@ -179,13 +179,13 @@ system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
 
 界面使用五级语义字号：
 
-| Token | 字号 | 行高 | 用途 |
-| --- | --- | --- | --- |
-| `--text-caption` | `12px` | `1.4` | 状态、Evidence、计数 |
-| `--text-label` | `13px` | `1.4` | Button、表头、Section Label |
-| `--text-body` | `14px` | `1.55` | 模型名称、Input、说明正文 |
+| Token            | 字号   | 行高   | 用途                          |
+| ---------------- | ------ | ------ | ----------------------------- |
+| `--text-caption` | `12px` | `1.4`  | 状态、Evidence、计数          |
+| `--text-label`   | `13px` | `1.4`  | Button、表头、Section Label   |
+| `--text-body`    | `14px` | `1.55` | 模型名称、Input、说明正文     |
 | `--text-heading` | `16px` | `1.25` | Panel Heading、Dialog Heading |
-| `--text-title` | `18px` | `1.25` | 当前主视图标题 |
+| `--text-title`   | `18px` | `1.25` | 当前主视图标题                |
 
 代码、API URL、模型 ID 和配置路径使用 `SFMono-Regular`、`Cascadia Code`、`Consolas` 回退，并关闭编程连字。动态计数使用 Tabular Numbers。界面不按 viewport 缩放字体，中文说明文字使用 `1.55` 行高。
 

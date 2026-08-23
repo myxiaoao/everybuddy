@@ -1,0 +1,37 @@
+name: Feature Request
+description: 提出功能或工程改进建议
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    attributes:
+      label: 问题
+      description: 说明当前操作中遇到的具体问题。
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: 期望行为
+      description: 说明期望看到的可观察结果。
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: 适用范围
+      multiple: true
+      options:
+        [
+          WorkBuddy,
+          CodeBuddy,
+          API Gateway,
+          模型配置,
+          发布与恢复,
+          UI,
+          工程与发布,
+        ]
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: 补充信息
+      description: 可提供已脱敏的截图、示例或兼容性说明。

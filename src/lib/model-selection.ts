@@ -12,13 +12,20 @@ export function deriveModelSelection(
   selectedTargets: TargetKind[],
   overrides: Map<string, boolean>,
 ): ModelSelection {
-  const stateByTarget = new Map(targetStates.map((state) => [state.target, new Set(state.matchedModelKeys)]));
+  const stateByTarget = new Map(
+    targetStates.map((state) => [
+      state.target,
+      new Set(state.matchedModelKeys),
+    ]),
+  );
   const checkedKeys = new Set<string>();
   const indeterminateKeys = new Set<string>();
   const presentTargetsByKey = new Map<string, TargetKind[]>();
 
   for (const model of models) {
-    const presentTargets = selectedTargets.filter((target) => stateByTarget.get(target)?.has(model.key));
+    const presentTargets = selectedTargets.filter((target) =>
+      stateByTarget.get(target)?.has(model.key),
+    );
     presentTargetsByKey.set(model.key, presentTargets);
     const override = overrides.get(model.key);
     if (override === true) {

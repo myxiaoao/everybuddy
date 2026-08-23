@@ -1,6 +1,10 @@
 :root {
-  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
-  --font-mono: "SFMono-Regular", "Cascadia Code", "Segoe UI Mono", Consolas, "Liberation Mono", monospace;
+  --font-sans:
+    system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
+    "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  --font-mono:
+    "SFMono-Regular", "Cascadia Code", "Segoe UI Mono", Consolas,
+    "Liberation Mono", monospace;
   --text-caption: 0.75rem;
   --text-label: 0.8125rem;
   --text-body: 0.875rem;
@@ -56,19 +60,36 @@
   --color-text-primary: var(--foreground);
   --color-text-secondary: var(--muted-foreground);
   --color-text-tertiary: var(--muted-foreground);
-  --color-text-on-subtle: color-mix(in oklab, var(--muted-foreground) 80%, var(--foreground));
+  --color-text-on-subtle: color-mix(
+    in oklab,
+    var(--muted-foreground) 80%,
+    var(--foreground)
+  );
   --color-border-subtle: var(--border);
   --color-border-strong: var(--input);
   --color-accent-solid: var(--primary);
-  --color-accent-hover: color-mix(in oklab, var(--primary) 90%, var(--background));
+  --color-accent-hover: color-mix(
+    in oklab,
+    var(--primary) 90%,
+    var(--background)
+  );
   --color-accent-soft: var(--accent);
   --color-accent-text: var(--accent-foreground);
-  --color-warning-soft: color-mix(in oklab, var(--destructive) 8%, var(--background));
+  --color-warning-soft: color-mix(
+    in oklab,
+    var(--destructive) 8%,
+    var(--background)
+  );
   --color-warning-text: var(--destructive);
-  --color-danger-soft: color-mix(in oklab, var(--destructive) 10%, var(--background));
+  --color-danger-soft: color-mix(
+    in oklab,
+    var(--destructive) 10%,
+    var(--background)
+  );
   --color-danger-text: var(--destructive);
   --color-focus: var(--ring);
-  --shadow-floating: 0 16px 42px oklch(0 0 0 / 0.18), 0 2px 8px oklch(0 0 0 / 0.12);
+  --shadow-floating:
+    0 16px 42px oklch(0 0 0 / 0.18), 0 2px 8px oklch(0 0 0 / 0.12);
 }
 
 :root[data-theme="dark"] {
@@ -92,7 +113,8 @@
   --input: oklch(1 0 0 / 0.15);
   --ring: oklch(0.556 0 0);
   --color-bg-sidebar: oklch(0.204627 0 0);
-  --shadow-floating: 0 18px 48px oklch(0 0 0 / 0.48), 0 2px 8px oklch(0 0 0 / 0.28);
+  --shadow-floating:
+    0 18px 48px oklch(0 0 0 / 0.48), 0 2px 8px oklch(0 0 0 / 0.28);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -117,7 +139,8 @@
     --input: oklch(1 0 0 / 0.15);
     --ring: oklch(0.556 0 0);
     --color-bg-sidebar: oklch(0.204627 0 0);
-    --shadow-floating: 0 18px 48px oklch(0 0 0 / 0.48), 0 2px 8px oklch(0 0 0 / 0.28);
+    --shadow-floating:
+      0 18px 48px oklch(0 0 0 / 0.48), 0 2px 8px oklch(0 0 0 / 0.28);
   }
 }
 

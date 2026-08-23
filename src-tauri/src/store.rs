@@ -1,26 +1,31 @@
 use std::{
     collections::HashMap,
-    path::{Path, PathBuf},
+    path::Path,
     str::FromStr,
     sync::{Mutex, MutexGuard},
     time::Duration,
 };
 
 use chrono::Utc;
-use rusqlite::{params, Connection, DatabaseName, OptionalExtension, TransactionBehavior};
-use uuid::Uuid;
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 use crate::{
     error::{CoreError, CoreResult},
     models::{AppSettings, BackupRecord, GatewayProfile, ManagedModel, TargetKind},
 };
 
+mod migration;
+mod queries;
+
+use migration::SCHEMA_VERSION;
+use queries::{
+    insert_missing_model, insert_model, model_versions, query_gateway, query_gateways,
+    query_models, to_json,
+};
+
 pub struct Store {
     connection: Mutex<Connection>,
-    database_path: PathBuf,
 }
-
-const SCHEMA_VERSION: i64 = 1;
 
 pub struct TargetStateUpdate {
     pub target: TargetKind,
@@ -36,7 +41,7 @@ impl Store {
             std::fs::create_dir_all(parent)?;
         }
         let database_existed = path.exists() && path.metadata()?.len() > 0;
-        let connection = Connection::open(path)?;
+        let mut connection = Connection::open(path)?;
         let current_version: i64 =
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if current_version > SCHEMA_VERSION {
@@ -47,11 +52,10 @@ impl Store {
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.busy_timeout(Duration::from_secs(5))?;
+        migration::migrate(&mut connection, path, current_version, database_existed)?;
         let store = Self {
             connection: Mutex::new(connection),
-            database_path: path.to_path_buf(),
         };
-        store.migrate(current_version, database_existed)?;
         Ok(store)
     }
 
@@ -59,116 +63,6 @@ impl Store {
         self.connection
             .lock()
             .map_err(|_| CoreError::Storage("The local database lock is unavailable".to_string()))
-    }
-
-    fn migrate(&self, current_version: i64, database_existed: bool) -> CoreResult<()> {
-        if current_version == SCHEMA_VERSION {
-            return Ok(());
-        }
-
-        let mut connection = self.connection()?;
-        let has_user_tables: bool = connection.query_row(
-            "SELECT EXISTS(
-                SELECT 1 FROM sqlite_master
-                WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
-            )",
-            [],
-            |row| row.get(0),
-        )?;
-        if database_existed && has_user_tables {
-            self.backup_before_migration(&connection, current_version)?;
-        }
-
-        let transaction = connection.transaction()?;
-        transaction.execute_batch(
-            r#"
-            CREATE TABLE IF NOT EXISTS gateway_profiles (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                api_root TEXT NOT NULL,
-                token_ref TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS models (
-                model_key TEXT PRIMARY KEY,
-                gateway_id TEXT NOT NULL,
-                upstream_id TEXT NOT NULL,
-                name TEXT NOT NULL,
-                vendor TEXT NOT NULL,
-                capabilities_json TEXT NOT NULL,
-                configuration_json TEXT NOT NULL DEFAULT '{}',
-                evidence_json TEXT NOT NULL,
-                metadata_json TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY(gateway_id) REFERENCES gateway_profiles(id) ON DELETE CASCADE
-            );
-
-            CREATE INDEX IF NOT EXISTS models_gateway_idx ON models(gateway_id);
-
-            CREATE TABLE IF NOT EXISTS target_states (
-                target TEXT PRIMARY KEY,
-                path TEXT NOT NULL,
-                last_seen_hash TEXT,
-                last_published_hash TEXT,
-                schema_name TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS backups (
-                id TEXT PRIMARY KEY,
-                target TEXT NOT NULL,
-                path TEXT NOT NULL,
-                source_path TEXT NOT NULL,
-                fingerprint TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS backups_target_created_idx
-                ON backups(target, created_at DESC);
-
-            CREATE TABLE IF NOT EXISTS app_settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            "#,
-        )?;
-        let has_configuration_column = {
-            let mut statement = transaction.prepare("PRAGMA table_info(models)")?;
-            let columns = statement
-                .query_map([], |row| row.get::<_, String>(1))?
-                .collect::<Result<Vec<_>, _>>()?;
-            columns.iter().any(|column| column == "configuration_json")
-        };
-        if !has_configuration_column {
-            transaction.execute(
-                "ALTER TABLE models ADD COLUMN configuration_json TEXT NOT NULL DEFAULT '{}'",
-                [],
-            )?;
-        }
-        transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-        transaction.commit()?;
-        Ok(())
-    }
-
-    fn backup_before_migration(
-        &self,
-        connection: &Connection,
-        current_version: i64,
-    ) -> CoreResult<()> {
-        let parent = self.database_path.parent().ok_or_else(|| {
-            CoreError::Storage("The database path has no parent directory".to_string())
-        })?;
-        let backup_directory = parent.join("migration-backups");
-        std::fs::create_dir_all(&backup_directory)?;
-        let timestamp = Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
-        let backup_path = backup_directory.join(format!(
-            "everybuddy-v{current_version}-{timestamp}-{}.db",
-            Uuid::new_v4()
-        ));
-        connection.backup(DatabaseName::Main, &backup_path, None)?;
-        Ok(())
     }
 
     pub fn list_gateways(&self) -> CoreResult<Vec<GatewayProfile>> {
@@ -518,158 +412,6 @@ impl Store {
         transaction.commit()?;
         Ok(())
     }
-}
-
-fn query_gateways(connection: &Connection) -> CoreResult<Vec<GatewayProfile>> {
-    let mut statement = connection.prepare(
-        "SELECT id, name, api_root, token_ref, created_at, updated_at
-         FROM gateway_profiles ORDER BY name COLLATE NOCASE",
-    )?;
-    let rows = statement.query_map([], |row| {
-        Ok(GatewayProfile {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            api_root: row.get(2)?,
-            token_ref: row.get(3)?,
-            created_at: row.get(4)?,
-            updated_at: row.get(5)?,
-        })
-    })?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-}
-
-fn query_gateway(connection: &Connection, id: &str) -> CoreResult<Option<GatewayProfile>> {
-    connection
-        .query_row(
-            "SELECT id, name, api_root, token_ref, created_at, updated_at
-             FROM gateway_profiles WHERE id = ?1",
-            [id],
-            |row| {
-                Ok(GatewayProfile {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    api_root: row.get(2)?,
-                    token_ref: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(Into::into)
-}
-
-fn query_models(
-    connection: &Connection,
-    gateway_id: Option<&str>,
-) -> CoreResult<Vec<ManagedModel>> {
-    let sql = if gateway_id.is_some() {
-        "SELECT model_key, gateway_id, upstream_id, name, vendor, capabilities_json,
-                configuration_json, evidence_json, metadata_json, updated_at
-         FROM models WHERE gateway_id = ?1 ORDER BY name COLLATE NOCASE"
-    } else {
-        "SELECT model_key, gateway_id, upstream_id, name, vendor, capabilities_json,
-                configuration_json, evidence_json, metadata_json, updated_at
-         FROM models ORDER BY name COLLATE NOCASE"
-    };
-    let mut statement = connection.prepare(sql)?;
-    let mut rows = if let Some(id) = gateway_id {
-        statement.query([id])?
-    } else {
-        statement.query([])?
-    };
-    let mut models = Vec::new();
-    while let Some(row) = rows.next()? {
-        let capabilities = parse_json(&row.get::<_, String>(5)?)?;
-        let raw_configuration = row.get::<_, String>(6)?;
-        let metadata = parse_json(&row.get::<_, String>(8)?)?;
-        let configuration = if raw_configuration.trim() == "{}" {
-            crate::capability::configuration_from_metadata(&metadata, &capabilities)
-        } else {
-            parse_json(&raw_configuration)?
-        };
-        models.push(ManagedModel {
-            key: row.get(0)?,
-            gateway_id: row.get(1)?,
-            id: row.get(2)?,
-            name: row.get(3)?,
-            vendor: row.get(4)?,
-            capabilities,
-            configuration,
-            evidence: parse_json(&row.get::<_, String>(7)?)?,
-            metadata,
-            updated_at: row.get(9)?,
-        });
-    }
-    Ok(models)
-}
-
-fn model_versions(connection: &Connection, gateway_id: &str) -> CoreResult<Vec<(String, String)>> {
-    let mut statement = connection.prepare(
-        "SELECT model_key, updated_at FROM models WHERE gateway_id = ?1 ORDER BY model_key",
-    )?;
-    let rows = statement.query_map([gateway_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-}
-
-fn insert_model(connection: &Connection, model: &ManagedModel) -> CoreResult<()> {
-    connection.execute(
-        r#"INSERT INTO models
-           (model_key, gateway_id, upstream_id, name, vendor, capabilities_json,
-            configuration_json, evidence_json, metadata_json, updated_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-           ON CONFLICT(model_key) DO UPDATE SET
-             name = excluded.name,
-             vendor = excluded.vendor,
-             capabilities_json = excluded.capabilities_json,
-             configuration_json = excluded.configuration_json,
-             evidence_json = excluded.evidence_json,
-             metadata_json = excluded.metadata_json,
-             updated_at = excluded.updated_at"#,
-        params![
-            model.key,
-            model.gateway_id,
-            model.id,
-            model.name,
-            model.vendor,
-            to_json(&model.capabilities)?,
-            to_json(&model.configuration)?,
-            to_json(&model.evidence)?,
-            to_json(&model.metadata)?,
-            model.updated_at
-        ],
-    )?;
-    Ok(())
-}
-
-fn insert_missing_model(connection: &Connection, model: &ManagedModel) -> CoreResult<()> {
-    connection.execute(
-        r#"INSERT OR IGNORE INTO models
-           (model_key, gateway_id, upstream_id, name, vendor, capabilities_json,
-            configuration_json, evidence_json, metadata_json, updated_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"#,
-        params![
-            model.key,
-            model.gateway_id,
-            model.id,
-            model.name,
-            model.vendor,
-            to_json(&model.capabilities)?,
-            to_json(&model.configuration)?,
-            to_json(&model.evidence)?,
-            to_json(&model.metadata)?,
-            model.updated_at
-        ],
-    )?;
-    Ok(())
-}
-
-fn to_json<T: serde::Serialize>(value: &T) -> CoreResult<String> {
-    serde_json::to_string(value).map_err(|error| CoreError::Storage(error.to_string()))
-}
-
-fn parse_json<T: serde::de::DeserializeOwned>(value: &str) -> CoreResult<T> {
-    serde_json::from_str(value).map_err(|error| CoreError::Storage(error.to_string()))
 }
 
 #[cfg(test)]

@@ -11,7 +11,11 @@ import {
 import type { GatewayProfile } from "../types";
 import type { createTranslator } from "../lib/i18n";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 export type WorkspaceView = "gateways" | "models" | "details";
 
@@ -46,15 +50,31 @@ export function CommandBar({
 }: CommandBarProps) {
   const canPublish = selectedModelCount > 0 && selectedTargetCount > 0;
   const currentStage = {
-    gateways: { label: t("apiStage"), detail: gateway?.name ?? t("addGateway") },
-    models: { label: t("modelStage"), detail: t("discoveredCount", { count: modelCount }) },
-    details: { label: t("targetStage"), detail: t("selectedTargetsCount", { count: selectedTargetCount }) },
+    gateways: {
+      label: t("apiStage"),
+      detail: gateway?.name ?? t("addGateway"),
+    },
+    models: {
+      label: t("modelStage"),
+      detail: t("discoveredCount", { count: modelCount }),
+    },
+    details: {
+      label: t("targetStage"),
+      detail: t("selectedTargetsCount", { count: selectedTargetCount }),
+    },
   }[view];
 
   return (
     <header className="command-bar" aria-label={t("configurationProgress")}>
       <div className="command-context">
-        <Button variant="ghost" size="icon" className="compact-back" type="button" onClick={onBack} aria-label={t("back")}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="compact-back"
+          type="button"
+          onClick={onBack}
+          aria-label={t("back")}
+        >
           <ArrowLeft aria-hidden="true" size={18} />
         </Button>
 
@@ -72,7 +92,11 @@ export function CommandBar({
             complete={Boolean(gateway)}
             onClick={() => onNavigate("gateways")}
           />
-          <ChevronRight className="command-separator" aria-hidden="true" size={15} />
+          <ChevronRight
+            className="command-separator"
+            aria-hidden="true"
+            size={15}
+          />
           <CommandStage
             icon={<Boxes />}
             label={t("modelStage")}
@@ -82,7 +106,11 @@ export function CommandBar({
             disabled={!gateway}
             onClick={() => onNavigate("models")}
           />
-          <ChevronRight className="command-separator" aria-hidden="true" size={15} />
+          <ChevronRight
+            className="command-separator"
+            aria-hidden="true"
+            size={15}
+          />
           <CommandStage
             icon={<SlidersHorizontal />}
             label={t("targetStage")}
@@ -100,17 +128,42 @@ export function CommandBar({
           <>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="command-refresh" type="button" onClick={onRefresh} disabled={refreshing} aria-label={t("refreshModels")}>
-                  {refreshing ? <LoaderCircle className="spin" aria-hidden="true" size={17} /> : <RefreshCw aria-hidden="true" size={17} />}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="command-refresh"
+                  type="button"
+                  onClick={onRefresh}
+                  disabled={refreshing}
+                  aria-label={t("refreshModels")}
+                >
+                  {refreshing ? (
+                    <LoaderCircle
+                      className="spin"
+                      aria-hidden="true"
+                      size={17}
+                    />
+                  ) : (
+                    <RefreshCw aria-hidden="true" size={17} />
+                  )}
                 </Button>
               </TooltipTrigger>
               <TooltipContent>{t("refreshModels")}</TooltipContent>
             </Tooltip>
-            <Button className="command-primary" type="button" onClick={onPublish} disabled={busy || !canPublish}>
+            <Button
+              className="command-primary"
+              type="button"
+              onClick={onPublish}
+              disabled={busy || !canPublish}
+            >
               <Upload aria-hidden="true" size={16} />
               <span className="command-primary__label">{t("publish")}</span>
-              <span className="command-primary__label--compact">{t("publishShort")}</span>
-              <span className="command-primary__count" aria-hidden="true">{selectedModelCount}</span>
+              <span className="command-primary__label--compact">
+                {t("publishShort")}
+              </span>
+              <span className="command-primary__count" aria-hidden="true">
+                {selectedModelCount}
+              </span>
             </Button>
           </>
         ) : null}
@@ -144,7 +197,9 @@ function CommandStage({
       disabled={disabled}
       aria-current={active ? "step" : undefined}
     >
-      <span className="command-stage__icon" aria-hidden="true">{icon}</span>
+      <span className="command-stage__icon" aria-hidden="true">
+        {icon}
+      </span>
       <span className="command-stage__copy">
         <strong>{label}</strong>
         <small>{detail}</small>

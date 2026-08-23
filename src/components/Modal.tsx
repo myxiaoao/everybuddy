@@ -37,11 +37,21 @@ export function Modal({
   onClose,
 }: ModalProps) {
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
-      <DialogContent className={cn(widths[size], "gap-0")} closeLabel={closeLabel}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) onClose();
+      }}
+    >
+      <DialogContent
+        className={cn(widths[size], "gap-0")}
+        closeLabel={closeLabel}
+      >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
-          {description ? <DialogDescription>{description}</DialogDescription> : null}
+          {description ? (
+            <DialogDescription>{description}</DialogDescription>
+          ) : null}
         </DialogHeader>
         <div className="modal__body">{children}</div>
         {footer ? <DialogFooter>{footer}</DialogFooter> : null}

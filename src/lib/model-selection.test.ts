@@ -37,7 +37,9 @@ describe("deriveModelSelection", () => {
     expect([...selection.checkedKeys]).toEqual(["gateway::all"]);
     expect([...selection.indeterminateKeys]).toEqual(["gateway::partial"]);
     expect(selection.checkedKeys.has("gateway::none")).toBe(false);
-    expect(selection.presentTargetsByKey.get("gateway::partial")).toEqual(["workbuddy"]);
+    expect(selection.presentTargetsByKey.get("gateway::partial")).toEqual([
+      "workbuddy",
+    ]);
   });
 
   it("keeps explicit overrides when target scope changes", () => {

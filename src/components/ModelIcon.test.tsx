@@ -21,18 +21,30 @@ describe("ModelIcon", () => {
 
   it("keeps a text fallback for an unknown vendor", () => {
     const { container } = render(
-      <ModelIcon model={{ id: "private-model", name: "Private Model", vendor: "acme" }} />,
+      <ModelIcon
+        model={{ id: "private-model", name: "Private Model", vendor: "acme" }}
+      />,
     );
 
-    expect(container.querySelector("[data-model-brand='custom']")).toHaveTextContent("AC");
+    expect(
+      container.querySelector("[data-model-brand='custom']"),
+    ).toHaveTextContent("AC");
   });
 
   it("renders the colored DeepSeek asset without a monochrome mask", () => {
     const { container } = render(
-      <ModelIcon model={{ id: "deepseek-r1", name: "DeepSeek R1", vendor: "deepseek" }} />,
+      <ModelIcon
+        model={{ id: "deepseek-r1", name: "DeepSeek R1", vendor: "deepseek" }}
+      />,
     );
 
-    expect(container.querySelector("[data-model-brand='deepseek'] img")).toBeInTheDocument();
-    expect(container.querySelector("[data-model-brand='deepseek'] .vendor-mark__glyph")).not.toBeInTheDocument();
+    expect(
+      container.querySelector("[data-model-brand='deepseek'] img"),
+    ).toBeInTheDocument();
+    expect(
+      container.querySelector(
+        "[data-model-brand='deepseek'] .vendor-mark__glyph",
+      ),
+    ).not.toBeInTheDocument();
   });
 });
