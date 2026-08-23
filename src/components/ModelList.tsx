@@ -1,5 +1,14 @@
 import { useMemo, useState } from "react";
-import { BrainCircuit, Image, Plus, Search, Wrench, X } from "lucide-react";
+import {
+  BrainCircuit,
+  CircleCheck,
+  CircleMinus,
+  Image,
+  Plus,
+  Search,
+  Wrench,
+  X,
+} from "lucide-react";
 import type { ManagedModel, TargetKind } from "../types";
 import type { createTranslator } from "../lib/i18n";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -206,6 +215,9 @@ export function ModelList({
                         className="model-row__identity"
                         type="button"
                         onClick={() => onActivate(model.key)}
+                        aria-current={
+                          activeKey === model.key ? "true" : undefined
+                        }
                       >
                         <span className="model-row__name">
                           <strong>{model.name}</strong>
@@ -391,6 +403,11 @@ function CapabilityIcon({
       <TooltipTrigger asChild>
         <span className={enabled ? "is-enabled" : ""} aria-hidden="true">
           {children}
+          {enabled ? (
+            <CircleCheck className="capability-state-icon" />
+          ) : (
+            <CircleMinus className="capability-state-icon" />
+          )}
         </span>
       </TooltipTrigger>
       <TooltipContent>{description}</TooltipContent>

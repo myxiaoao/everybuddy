@@ -46,6 +46,11 @@
   background: var(--color-bg-surface);
 }
 
+.search-field:has(input:focus-visible) {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
 .search-field input {
   min-width: 0;
   width: 100%;
@@ -264,7 +269,7 @@ input[type="checkbox"] {
   color: var(--color-text-secondary);
   background: var(--color-bg-subtle);
   border-radius: var(--radius-xs);
-  font-size: 0.6875rem;
+  font-size: var(--text-caption);
   font-weight: 600;
   line-height: var(--leading-ui);
 }
@@ -276,6 +281,7 @@ input[type="checkbox"] {
 }
 
 .capability-icons > span {
+  position: relative;
   display: grid;
   place-items: center;
   width: 26px;
@@ -296,6 +302,18 @@ input[type="checkbox"] {
   width: 14px;
   height: 14px;
   stroke-width: 1.8;
+}
+
+.capability-icons .capability-state-icon {
+  position: absolute;
+  inset-inline-end: 1px;
+  inset-block-end: 1px;
+  width: 9px;
+  height: 9px;
+  color: currentColor;
+  background: inherit;
+  border-radius: 50%;
+  stroke-width: 2.4;
 }
 
 .inspector-panel {
@@ -630,6 +648,7 @@ input[type="checkbox"] {
 
 .model-config-field > small {
   color: var(--color-text-tertiary);
+  font-size: var(--text-caption);
   font-weight: 400;
   line-height: var(--leading-body);
   text-wrap: pretty;
@@ -748,6 +767,10 @@ input[type="checkbox"] {
   border-color: color-mix(in oklab, var(--color-accent-solid) 35%, transparent);
 }
 
+.target-option.is-selected .target-option__copy code {
+  color: var(--color-text-primary);
+}
+
 .target-option.is-disabled {
   cursor: not-allowed;
   opacity: 0.62;
@@ -796,6 +819,11 @@ input[type="checkbox"] {
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+.target-option__icon[data-target-kind="codebuddy"] img {
+  width: 81.25%;
+  height: 81.25%;
 }
 
 .target-option__copy {

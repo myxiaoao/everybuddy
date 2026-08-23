@@ -232,13 +232,15 @@ function App() {
         );
         if (
           data.importReport.importedGatewayCount > 0 ||
-          data.importReport.importedModelCount > 0
+          data.importReport.importedModelCount > 0 ||
+          data.importReport.issues.length > 0
         ) {
           const bootstrapT = createTranslator(data.settings.language);
           setMessage(
-            bootstrapT("importSucceeded", {
+            bootstrapT("importAnnouncement", {
               gateways: data.importReport.importedGatewayCount,
               models: data.importReport.importedModelCount,
+              issues: data.importReport.issues.length,
             }),
           );
         }
@@ -314,7 +316,10 @@ function App() {
   }
 
   function selectGateway(id: string) {
-    if (id === selectedGatewayId) return;
+    if (id === selectedGatewayId) {
+      setCompactView("models");
+      return;
+    }
     runAfterDiscard(() => {
       setSelectedGatewayId(id);
       setQuery("");
@@ -672,8 +677,17 @@ function App() {
 
   return (
     <TooltipProvider delayDuration={350}>
-      <div className={`app-shell compact-view-${compactView}`}>
-        <a className="skip-link" href="#workspace">
+      <div
+        className={`app-shell compact-view-${compactView}${importReport ? " has-import-notice" : ""}`}
+      >
+        <a
+          className="skip-link"
+          href="#workspace"
+          onClick={(event) => {
+            event.preventDefault();
+            document.getElementById("workspace")?.focus();
+          }}
+        >
           {t("skipWorkspace")}
         </a>
         <CommandBar
@@ -692,11 +706,22 @@ function App() {
           onRefresh={() =>
             selectedGatewayId && requestRefreshModels(selectedGatewayId)
           }
-          onPublish={() => void previewPublish()}
+          onPublish={() => runAfterDiscard(previewPublish)}
         />
 
-        <main id="workspace" className="workspace">
+        {importReport ? (
+          <ImportNotice
+            report={importReport}
+            expanded={importDetailsExpanded}
+            t={t}
+            onToggle={() => setImportDetailsExpanded((current) => !current)}
+            onClose={() => setImportReport(null)}
+          />
+        ) : null}
+
+        <main id="workspace" className="workspace" tabIndex={-1}>
           <GatewaySidebar
+            currentVersion={currentVersion}
             gateways={gateways}
             selectedId={selectedGatewayId}
             busyId={busyGatewayId}
@@ -799,16 +824,6 @@ function App() {
             </Button>
           </div>
         ) : null}
-        {importReport ? (
-          <ImportNotice
-            report={importReport}
-            expanded={importDetailsExpanded}
-            t={t}
-            onToggle={() => setImportDetailsExpanded((current) => !current)}
-            onClose={() => setImportReport(null)}
-          />
-        ) : null}
-
         {gatewayDialog ? (
           <GatewayDialog
             open
@@ -841,11 +856,6 @@ function App() {
         ) : null}
         {publishDialog ? (
           <PublishDialog
-            key={
-              publishPreview
-                ? JSON.stringify(publishPreview.targets)
-                : "loading"
-            }
             open
             busy={busy}
             preview={publishPreview}

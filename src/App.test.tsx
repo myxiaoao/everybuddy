@@ -23,6 +23,7 @@ describe("EveryBuddy workspace", () => {
       expect(screen.getAllByText("GPT-5.6").length).toBeGreaterThan(0),
     );
     expect(screen.getAllByText("Sub2API").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("v0.1.0-alpha.1")).toBeInTheDocument();
     expect(screen.getByText("Local Relay")).toBeInTheDocument();
     expect(screen.getAllByText("WorkBuddy").length).toBeGreaterThan(0);
     expect(screen.getAllByText("CodeBuddy").length).toBeGreaterThan(0);
@@ -48,6 +49,18 @@ describe("EveryBuddy workspace", () => {
     expect(
       modelTable.querySelectorAll(".capability-icons [tabindex]"),
     ).toHaveLength(0);
+    expect(modelTable.querySelectorAll(".capability-state-icon")).toHaveLength(
+      12,
+    );
+    expect(
+      screen.getByRole("button", { name: /GPT-5\.6.*gpt-5\.6/ }),
+    ).toHaveAttribute("aria-current", "true");
+    expect(document.querySelectorAll(".gateway-status-icon svg")).toHaveLength(
+      2,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "发现 1 个需要关注的配置项",
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "手动添加模型" }));
     const dialog = screen.getByRole("dialog", { name: "手动添加模型" });
@@ -164,6 +177,70 @@ describe("EveryBuddy workspace", () => {
     );
   });
 
+  it("guards unsaved model edits before preparing a publish", async () => {
+    const preparePublish = vi.spyOn(api, "preparePublish");
+    render(<App />);
+
+    await screen.findAllByText("GPT-5.6");
+    fireEvent.click(screen.getByRole("switch", { name: "推理模式" }));
+    const publishButton = screen.getByRole("button", { name: /预览并发布/ });
+    publishButton.focus();
+    fireEvent.click(publishButton);
+
+    const dialog = screen.getByRole("dialog", {
+      name: "丢弃未保存的更改",
+    });
+    expect(preparePublish).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "丢弃更改" }));
+    await waitFor(() => expect(preparePublish).toHaveBeenCalledOnce());
+    const publishDialog = await screen.findByRole("dialog", {
+      name: "确认配置变更",
+    });
+    fireEvent.click(
+      within(publishDialog).getByRole("button", { name: "关闭" }),
+    );
+    await waitFor(() => expect(publishButton).toHaveFocus());
+  });
+
+  it("returns to models when the selected API source is chosen again", async () => {
+    render(<App />);
+
+    await screen.findAllByText("GPT-5.6");
+    const shell = document.querySelector(".app-shell");
+    fireEvent.click(screen.getByRole("button", { name: /API.*Sub2API/ }));
+    expect(shell).toHaveClass("compact-view-gateways");
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Sub2API, https:\/\/api\.example\.dev\/v1/,
+      }),
+    );
+    expect(shell).toHaveClass("compact-view-models");
+  });
+
+  it("moves focus into the workspace from the skip link", async () => {
+    render(<App />);
+
+    await screen.findAllByText("GPT-5.6");
+    const skipLink = screen.getByRole("link", { name: "跳到工作区" });
+    fireEvent.click(skipLink);
+
+    expect(screen.getByRole("main")).toHaveFocus();
+  });
+
+  it("restores focus to the button that opened a dialog", async () => {
+    render(<App />);
+
+    await screen.findAllByText("GPT-5.6");
+    const settingsButton = screen.getByRole("button", { name: "设置" });
+    settingsButton.focus();
+    fireEvent.click(settingsButton);
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "关闭" }));
+
+    await waitFor(() => expect(settingsButton).toHaveFocus());
+  });
+
   it("does not change the active model when selecting models for publish", async () => {
     render(<App />);
 
@@ -273,11 +350,10 @@ describe("EveryBuddy workspace", () => {
 
     const alert = await screen.findByRole("alert");
     expect(screen.getAllByRole("alert")).toHaveLength(1);
-    expect(alert).toHaveTextContent("无法提交当前内容");
-    expect(alert).toHaveTextContent("检查必填项、模型选择和发布目标后重试");
-    expect(screen.getByRole("status")).not.toHaveTextContent(
-      "无法提交当前内容",
-    );
+    expect(alert).toHaveTextContent("模型已存在");
+    expect(alert).toHaveTextContent("当前 API 来源中已有相同的 Model ID");
+    expect(alert).toHaveTextContent("使用其他 Model ID，或编辑已有模型");
+    expect(screen.getByRole("status")).not.toHaveTextContent("模型已存在");
   });
 
   it("uses app dialogs for destructive confirmations", async () => {
@@ -289,7 +365,7 @@ describe("EveryBuddy workspace", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "移除" }));
 
-    const deleteDialog = screen.getByRole("dialog", { name: "移除 API 接口" });
+    const deleteDialog = screen.getByRole("dialog", { name: "移除 API 来源" });
     expect(deleteDialog).toBeInTheDocument();
     fireEvent.click(within(deleteDialog).getByRole("button", { name: "取消" }));
     fireEvent.click(screen.getByRole("button", { name: "备份与恢复" }));

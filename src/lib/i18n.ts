@@ -54,12 +54,12 @@ const messages = {
     selectPartialModel:
       "模型 {name} 已存在于 {targets}，选择后发布到全部当前目标",
     modelPresentInTargets: "已存在于 {targets}；选择后发布到全部当前目标。",
-    noGatewayTitle: "添加第一个 API 接口",
+    noGatewayTitle: "添加第一个 API 来源",
     noGatewayBody:
       "输入 OpenAI-compatible API 地址和 Token，EveryBuddy 将读取 /v1/models。",
     noModelsTitle: "尚未发现模型",
     noModelsBody:
-      "刷新当前 API 接口以获取可用模型。发现操作不会产生模型 Token 消耗。",
+      "刷新当前 API 来源以获取可用模型。发现操作不会产生模型 Token 消耗。",
     noMatchingModelsTitle: "没有匹配的模型",
     noMatchingModelsBody:
       "当前条件“{query}”没有匹配结果。清除筛选后查看全部模型。",
@@ -88,8 +88,8 @@ const messages = {
     modelDisplayName: "模型名称",
     invocationConfig: "调用参数",
     endpointOverride: "接口地址（可选）",
-    endpointOverrideHint: "留空时使用当前 API Profile 的 Base URL。",
-    endpointOverridePlaceholder: "使用 API Profile 地址",
+    endpointOverrideHint: "留空时使用当前 API 来源的 Base URL。",
+    endpointOverridePlaceholder: "使用 API 来源地址",
     maxInputTokens: "输入",
     maxOutputTokens: "输出",
     providerDefaultPlaceholder: "使用提供商默认值",
@@ -146,6 +146,8 @@ const messages = {
     confirmPublish: "发布到 {count} 个目标",
     published: "模型配置已发布",
     importSucceeded: "已从目标配置导入 {gateways} 个 API 和 {models} 个模型。",
+    importAnnouncement:
+      "启动配置恢复完成：导入 {gateways} 个 API、{models} 个模型，发现 {issues} 个需要关注的配置项。",
     importNoticeTitle: "启动导入需要关注",
     importNoticeSuccessTitle: "已恢复目标配置",
     importNoticeSummary: "{count} 个配置项未自动导入或存在差异。",
@@ -204,7 +206,7 @@ const messages = {
     skipWorkspace: "跳到工作区",
     back: "返回",
     connectionError: "无法完成请求",
-    deleteGatewayTitle: "移除 API 接口",
+    deleteGatewayTitle: "移除 API 来源",
     deleteGatewayConfirm:
       "移除“{name}”及其本地模型记录。已发布到目标应用的配置不会被删除。",
     deleteGatewayAction: "移除 API",
@@ -240,6 +242,31 @@ const messages = {
     errorValidationTitle: "无法提交当前内容",
     errorValidationMessage: "当前输入或选择不符合操作要求。",
     errorValidationRecovery: "检查必填项、模型选择和发布目标后重试。",
+    errorDuplicateModelTitle: "模型已存在",
+    errorDuplicateModelMessage: "当前 API 来源中已有相同的 Model ID。",
+    errorDuplicateModelRecovery: "使用其他 Model ID，或编辑已有模型。",
+    errorApiUrlTitle: "API 地址无效",
+    errorApiUrlMessage: "当前地址不符合 API 来源的连接要求。",
+    errorApiUrlRecovery:
+      "输入 HTTP 或 HTTPS 地址；远程地址使用 HTTPS，并移除查询参数、片段和内嵌凭据。",
+    errorPublishSelectionTitle: "发布范围不完整",
+    errorPublishSelectionMessage: "发布需要至少一个模型和一个可用目标。",
+    errorPublishSelectionRecovery:
+      "选择模型以及 WorkBuddy、CodeBuddy 或两者后重试。",
+    errorModelConfigTitle: "模型参数无效",
+    errorModelConfigMessage: "模型标识、数值或思考参数组合不符合要求。",
+    errorModelConfigRecovery:
+      "检查必填字段、Temperature 和支持的思考强度后重试。",
+    errorStaleDataTitle: "本地数据已变化",
+    errorStaleDataMessage: "当前 API、模型或备份记录已不存在。",
+    errorStaleDataRecovery: "重新加载当前视图，再选择仍然存在的项目。",
+    errorSettingsValidationTitle: "设置无法保存",
+    errorSettingsValidationMessage: "语言、外观或配置路径包含无效值。",
+    errorSettingsValidationRecovery:
+      "恢复支持的选项，并为两个目标填写有效路径。",
+    errorRequiredFieldTitle: "缺少必填内容",
+    errorRequiredFieldMessage: "名称、Token 或 Model ID 尚未填写。",
+    errorRequiredFieldRecovery: "补充标记为必填的内容后重试。",
     errorUnexpectedMessage: "操作未能完成。",
     errorUnexpectedRecovery: "关闭提示后重试；如果问题持续，请重新打开应用。",
     unknown: "未知",
@@ -305,12 +332,12 @@ const messages = {
       "Model {name} exists in {targets}; select it to publish to every current target",
     modelPresentInTargets:
       "Already in {targets}. Select to publish to every current target.",
-    noGatewayTitle: "Add your first API gateway",
+    noGatewayTitle: "Add your first API source",
     noGatewayBody:
       "Enter an OpenAI-compatible API URL and token. EveryBuddy reads /v1/models.",
     noModelsTitle: "No models discovered",
     noModelsBody:
-      "Refresh this gateway to load models. Discovery does not consume model tokens.",
+      "Refresh this API source to load models. Discovery does not consume model tokens.",
     noMatchingModelsTitle: "No matching models",
     noMatchingModelsBody:
       "No models match “{query}”. Clear filters to view all models.",
@@ -340,9 +367,8 @@ const messages = {
     modelDisplayName: "Display name",
     invocationConfig: "Invocation parameters",
     endpointOverride: "Endpoint override (optional)",
-    endpointOverrideHint:
-      "Leave blank to use the current API profile Base URL.",
-    endpointOverridePlaceholder: "Use API profile endpoint",
+    endpointOverrideHint: "Leave blank to use the current API source Base URL.",
+    endpointOverridePlaceholder: "Use API source endpoint",
     maxInputTokens: "Max input tokens",
     maxOutputTokens: "Max output tokens",
     providerDefaultPlaceholder: "Use provider default",
@@ -405,6 +431,8 @@ const messages = {
     published: "Model configuration published",
     importSucceeded:
       "Imported {gateways} APIs and {models} models from target configuration.",
+    importAnnouncement:
+      "Startup configuration recovery completed: imported {gateways} APIs and {models} models, with {issues} configuration items needing attention.",
     importNoticeTitle: "Startup import needs attention",
     importNoticeSuccessTitle: "Target configuration restored",
     importNoticeSummary:
@@ -475,7 +503,7 @@ const messages = {
     skipWorkspace: "Skip to workspace",
     back: "Back",
     connectionError: "Request could not be completed",
-    deleteGatewayTitle: "Remove API gateway",
+    deleteGatewayTitle: "Remove API source",
     deleteGatewayConfirm:
       "Remove “{name}” and its local model records. Published target configuration will remain unchanged.",
     deleteGatewayAction: "Remove API",
@@ -524,6 +552,40 @@ const messages = {
       "The current input or selection does not meet the operation requirements.",
     errorValidationRecovery:
       "Check required fields, selected models, and publish targets, then try again.",
+    errorDuplicateModelTitle: "Model already exists",
+    errorDuplicateModelMessage:
+      "The current API source already contains this Model ID.",
+    errorDuplicateModelRecovery:
+      "Use a different Model ID or edit the existing model.",
+    errorApiUrlTitle: "API URL is invalid",
+    errorApiUrlMessage:
+      "The URL does not meet the connection requirements for an API source.",
+    errorApiUrlRecovery:
+      "Use an HTTP or HTTPS URL. Remote URLs must use HTTPS and cannot include queries, fragments, or embedded credentials.",
+    errorPublishSelectionTitle: "Publish scope is incomplete",
+    errorPublishSelectionMessage:
+      "Publishing requires at least one model and one available target.",
+    errorPublishSelectionRecovery:
+      "Select models and WorkBuddy, CodeBuddy, or both, then try again.",
+    errorModelConfigTitle: "Model parameters are invalid",
+    errorModelConfigMessage:
+      "The model identity, numeric values, or reasoning settings are not valid together.",
+    errorModelConfigRecovery:
+      "Check required fields, Temperature, and supported reasoning efforts, then try again.",
+    errorStaleDataTitle: "Local data changed",
+    errorStaleDataMessage:
+      "The current API source, model, or backup record no longer exists.",
+    errorStaleDataRecovery:
+      "Reload the current view and select an item that still exists.",
+    errorSettingsValidationTitle: "Settings could not be saved",
+    errorSettingsValidationMessage:
+      "The language, appearance, or configuration path contains an invalid value.",
+    errorSettingsValidationRecovery:
+      "Restore a supported option and enter a valid path for both targets.",
+    errorRequiredFieldTitle: "Required information is missing",
+    errorRequiredFieldMessage:
+      "A name, token, or Model ID has not been entered.",
+    errorRequiredFieldRecovery: "Complete the required fields and try again.",
     errorUnexpectedMessage: "The operation could not be completed.",
     errorUnexpectedRecovery:
       "Dismiss this message and try again. Reopen the app if the problem continues.",

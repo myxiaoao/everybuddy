@@ -80,14 +80,14 @@
     var(--destructive) 8%,
     var(--background)
   );
-  --color-warning-text: var(--destructive);
+  --color-warning-text: oklch(0.48 0.2 27.325);
   --color-danger-soft: color-mix(
     in oklab,
     var(--destructive) 10%,
     var(--background)
   );
-  --color-danger-text: var(--destructive);
-  --color-focus: var(--ring);
+  --color-danger-text: oklch(0.48 0.2 27.325);
+  --color-focus: var(--foreground);
   --shadow-floating:
     0 16px 42px oklch(0 0 0 / 0.18), 0 2px 8px oklch(0 0 0 / 0.12);
 }
@@ -113,6 +113,8 @@
   --input: oklch(1 0 0 / 0.15);
   --ring: oklch(0.556 0 0);
   --color-bg-sidebar: oklch(0.204627 0 0);
+  --color-warning-text: var(--destructive);
+  --color-danger-text: var(--destructive);
   --shadow-floating:
     0 18px 48px oklch(0 0 0 / 0.48), 0 2px 8px oklch(0 0 0 / 0.28);
 }
@@ -139,6 +141,8 @@
     --input: oklch(1 0 0 / 0.15);
     --ring: oklch(0.556 0 0);
     --color-bg-sidebar: oklch(0.204627 0 0);
+    --color-warning-text: var(--destructive);
+    --color-danger-text: var(--destructive);
     --shadow-floating:
       0 18px 48px oklch(0 0 0 / 0.48), 0 2px 8px oklch(0 0 0 / 0.28);
   }
@@ -182,6 +186,11 @@ button:not([data-slot]):focus-visible,
 input:not([data-slot]):focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
+}
+
+.workspace:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
 }
 
 button:disabled {

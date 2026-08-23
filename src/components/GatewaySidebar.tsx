@@ -1,6 +1,10 @@
 import {
   ArchiveRestore,
+  Circle,
+  CircleCheck,
+  CircleX,
   ChevronRight,
+  LoaderCircle,
   Pencil,
   Plus,
   RefreshCw,
@@ -18,6 +22,7 @@ import {
 import everyBuddyIcon from "@/assets/everybuddy-icon-v6.png";
 
 interface GatewaySidebarProps {
+  currentVersion: string;
   gateways: GatewayProfile[];
   selectedId: string | null;
   busyId: string | null;
@@ -33,6 +38,7 @@ interface GatewaySidebarProps {
 }
 
 export function GatewaySidebar({
+  currentVersion,
   gateways,
   selectedId,
   busyId,
@@ -54,7 +60,10 @@ export function GatewaySidebar({
           <img src={everyBuddyIcon} alt="" />
         </div>
         <div>
-          <strong>{t("appName")}</strong>
+          <div className="brand-lockup__title">
+            <strong>{t("appName")}</strong>
+            <small>v{currentVersion}</small>
+          </div>
           <span>{t("appTagline")}</span>
         </div>
       </div>
@@ -103,10 +112,9 @@ export function GatewaySidebar({
                     aria-current={selected ? "true" : undefined}
                     aria-label={`${gateway.name}, ${gateway.apiRoot}, ${connectionLabel}`}
                   >
-                    <span
-                      className={`status-dot is-${connectionState}${busy ? " is-pulsing" : ""}`}
-                      title={connectionLabel}
-                      aria-hidden="true"
+                    <GatewayStatusIcon
+                      state={connectionState}
+                      label={connectionLabel}
                     />
                     <span>
                       <strong>{gateway.name}</strong>
@@ -198,6 +206,31 @@ export function GatewaySidebar({
         </Button>
       </div>
     </aside>
+  );
+}
+
+function GatewayStatusIcon({
+  state,
+  label,
+}: {
+  state: GatewayConnectionState;
+  label: string;
+}) {
+  const icon = {
+    idle: <Circle />,
+    refreshing: <LoaderCircle className="spin" />,
+    connected: <CircleCheck />,
+    error: <CircleX />,
+  }[state];
+
+  return (
+    <span
+      className={`gateway-status-icon is-${state}`}
+      title={label}
+      aria-hidden="true"
+    >
+      {icon}
+    </span>
   );
 }
 
