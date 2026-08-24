@@ -106,7 +106,7 @@ jobs:
         run: node scripts/prepare-release-config.mjs
 
       - name: Build updater-signed unsigned alpha assets
-        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -120,7 +120,7 @@ jobs:
             Download only from this repository and verify SHA256SUMS.txt before installation.
           releaseDraft: true
           prerelease: true
-          includeUpdaterJson: true
+          uploadUpdaterJson: true
           args: --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json --ci
 
       - name: Verify macOS bundle output
