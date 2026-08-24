@@ -139,7 +139,7 @@ let demoModels: ManagedModel[] = [
     true,
     true,
     "imported",
-    ["low", "medium", "high"],
+    ["low", "medium", "high", "xhigh", "max"],
     "high",
   ),
   createDemoModel(
@@ -150,7 +150,7 @@ let demoModels: ManagedModel[] = [
     true,
     true,
     false,
-    "catalog",
+    "openRouter",
   ),
   createDemoModel(
     demoGateway.id,
@@ -160,7 +160,7 @@ let demoModels: ManagedModel[] = [
     false,
     false,
     true,
-    "catalog",
+    "openRouter",
     [],
     null,
   ),
@@ -433,7 +433,7 @@ function createDemoModel(
   supportsToolCall: boolean,
   supportsImages: boolean,
   supportsReasoning: boolean,
-  source: "metadata" | "catalog" | "imported" | "probe",
+  source: "default" | "metadata" | "openRouter" | "imported" | "probe",
   supportedEfforts: ReasoningEffort[] = [],
   defaultEffort: ReasoningEffort | null = null,
 ): ManagedModel {
@@ -472,7 +472,13 @@ function createDemoModel(
         value: supportsToolCall,
         source,
         detail:
-          source === "probe" ? "Tool call returned" : "Known model metadata",
+          source === "probe"
+            ? "Tool call returned"
+            : source === "openRouter"
+              ? "OpenRouter model directory"
+              : source === "default"
+                ? "Conservative default"
+                : "Known model metadata",
         checkedAt: now,
       },
       {
@@ -533,60 +539,19 @@ function updateDemoModel(
 
 function createDemoManualModel(input: ManualModelInput): ManagedModel {
   const id = input.id.trim();
-  const vendor = input.vendor.trim().toLocaleLowerCase() || inferDemoVendor(id);
-  const lowerId = id.toLocaleLowerCase();
-  const reasoningPreset = demoReasoningPreset(lowerId);
-  const supportsToolCall = /gpt|claude|qwen/.test(lowerId);
-  const supportsImages = /gpt|claude|gemini/.test(lowerId);
-  const supportsReasoning =
-    reasoningPreset !== null ||
-    /gpt-5|reason|thinking|deepseek-r1/.test(lowerId);
+  const vendor = input.vendor.trim().toLocaleLowerCase() || "custom";
   const model = createDemoModel(
     input.gatewayId,
     id,
     input.name.trim() || id,
     vendor,
-    supportsToolCall,
-    supportsImages,
-    supportsReasoning,
-    "catalog",
-    reasoningPreset?.supportedEfforts,
-    reasoningPreset?.defaultEffort,
+    false,
+    false,
+    false,
+    "default",
   );
   return {
     ...model,
     metadata: { id, owned_by: vendor, everybuddySource: "manual" },
   };
-}
-
-function demoReasoningPreset(modelId: string): {
-  supportedEfforts: ReasoningEffort[];
-  defaultEffort: ReasoningEffort;
-} | null {
-  const segments = modelId.split("/");
-  const id = segments[segments.length - 1] ?? modelId;
-  if (
-    ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-reasoner"].some(
-      (family) => id === family || id.startsWith(`${family}-`),
-    )
-  ) {
-    return { supportedEfforts: ["high", "max"], defaultEffort: "high" };
-  }
-  if (id === "kimi-k3") {
-    return {
-      supportedEfforts: ["low", "high", "max"],
-      defaultEffort: "high",
-    };
-  }
-  return null;
-}
-
-function inferDemoVendor(id: string) {
-  const lowerId = id.toLocaleLowerCase();
-  if (/gpt|^o[134]/.test(lowerId)) return "openai";
-  if (lowerId.includes("claude")) return "anthropic";
-  if (lowerId.includes("gemini")) return "google";
-  if (lowerId.includes("deepseek")) return "deepseek";
-  if (lowerId.includes("qwen")) return "qwen";
-  return "custom";
 }

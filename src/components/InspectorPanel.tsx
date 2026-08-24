@@ -750,8 +750,8 @@ const sourceOrder = [
   "manual",
   "probe",
   "imported",
+  "openRouter",
   "metadata",
-  "catalog",
   "default",
 ] as const;
 
@@ -769,8 +769,8 @@ function sourceFor(
     .find(Boolean);
   const labels = {
     default: t("evidenceDefault"),
-    catalog: t("evidenceCatalog"),
     metadata: t("evidenceMetadata"),
+    openRouter: t("evidenceOpenRouter"),
     imported: t("evidenceImported"),
     probe: t("evidenceProbe"),
     manual: t("evidenceManual"),

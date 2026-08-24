@@ -2,7 +2,7 @@ export type TargetKind = "workbuddy" | "codebuddy";
 export type Theme = "light" | "dark" | "system";
 export type Language = "zh-CN" | "en";
 export type EvidenceSource =
-  "default" | "catalog" | "metadata" | "imported" | "probe" | "manual";
+  "default" | "metadata" | "openRouter" | "imported" | "probe" | "manual";
 export type TargetSchema = "missing" | "array" | "wrapped" | "invalid";
 export type GatewayConnectionState =
   "idle" | "refreshing" | "connected" | "error";

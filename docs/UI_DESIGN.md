@@ -79,7 +79,7 @@ Dialog 包含名称、API Base URL、Token Key。主要操作是「保存并发�
 ### 模型列表
 
 - 支持按名称、模型 ID 和 Vendor 搜索。
-- 「添加模型」打开手动模型 Dialog，Model ID 必填，显示名称和 Vendor 可选。保存过程不发送 API 请求。
+- 「添加模型」打开手动模型 Dialog，Model ID 必填，显示名称和 Vendor 可选。保存时复用 OpenRouter 本地缓存，缓存缺失或过期时读取公共目录；不调用模型，不产生 Token 费用。
 - 手动模型保存后进入当前模型详情，用户可继续确认 Capability、执行 Probe 或直接人工覆盖。
 - 手动模型显示「手动」来源标记；刷新当前 API 时仍保留未被 `/v1/models` 返回的手动模型。
 - 使用紧凑 Segmented Filter 按 All、Tool Call、Vision 和 Reasoning 筛选当前模型列表。
@@ -105,8 +105,9 @@ Dialog 包含名称、API Base URL、Token Key。主要操作是「保存并发�
 - 「Reasoning 配置」覆盖 `onlyReasoning`、`canDisableThinking`、默认 Effort、兼容 Effort、支持的 Effort 和 Summary。
 - `url` 和 `apiKey` 默认来自当前 API Profile；模型级请求地址覆盖只改变发布结果，不改变模型发现地址。
 - `supportedEfforts` 使用 Checkbox Group，包含 `minimal`、`low`、`medium`、`high`、`xhigh` 和 `max`。默认 Effort 和兼容 Effort 只能从已选档位中选择。
-- 强度范围优先使用 API metadata，其次使用稳定的模型级 Preset。界面分别提示「已自动匹配」「未发现可靠范围」和「当前选择已覆盖自动匹配结果」；未知模型不默认勾选任何档位。
-- 手动添加模型与自动发现使用相同的 Preset。API 刷新只更新未人工修改的自动配置，不覆盖手动添加、Target 导入或带人工 Evidence 的配置。
+- Capability 以 OpenRouter 精确匹配结果为准；未匹配或目录不可用时回退 Gateway metadata 和保守默认值。辅助文字展示 OpenRouter、API metadata、Probe、Target 导入或人工覆盖等实际 Evidence 来源。
+- OpenRouter 只能确认 `reasoning_effort` 参数是否存在，不能据此生成具体强度。`supportedEfforts` 只使用 Gateway 明确返回值、Target 导入值或人工覆盖。界面分别提示「已自动匹配」「未发现可靠范围」和「当前选择已覆盖自动匹配结果」；未知模型不默认勾选任何档位。
+- 手动添加与自动发现复用同一 OpenRouter 匹配逻辑。API 刷新只更新未人工修改的自动配置，不覆盖手动添加、Target 导入或带人工 Evidence 的配置。
 - 关闭 Reasoning 时清除不再有效的 Reasoning 参数；开启「仅 Reasoning 模式」时同步关闭「允许关闭 Reasoning」。
 
 ### 发布目标

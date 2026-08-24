@@ -3,33 +3,30 @@ use std::collections::BTreeMap;
 use chrono::Utc;
 use serde_json::Value;
 
-use crate::models::{
-    CapabilityEvidence, CapabilitySet, EvidenceSource, ManagedModel, ModelConfiguration,
-    ReasoningConfiguration, ReasoningEffort, ReasoningSummary,
+use crate::{
+    market_catalog::{normalize_vendor, MarketModel},
+    models::{
+        CapabilityEvidence, CapabilitySet, EvidenceSource, ManagedModel, ModelConfiguration,
+        ReasoningConfiguration, ReasoningEffort, ReasoningSummary,
+    },
 };
 
 #[derive(Debug, Clone)]
 pub struct CapabilityResolver;
 
-#[derive(Debug, Clone, Copy)]
-struct ReasoningPreset {
-    default_effort: ReasoningEffort,
-    supported_efforts: &'static [ReasoningEffort],
-    can_disable_thinking: bool,
-}
-
-const DEEPSEEK_REASONING_EFFORTS: &[ReasoningEffort] =
-    &[ReasoningEffort::High, ReasoningEffort::Max];
-const KIMI_K3_REASONING_EFFORTS: &[ReasoningEffort] = &[
-    ReasoningEffort::Low,
-    ReasoningEffort::High,
-    ReasoningEffort::Max,
-];
-
 impl CapabilityResolver {
     pub fn resolve(
         model_id: &str,
         metadata: &Value,
+        existing: &[CapabilityEvidence],
+    ) -> (CapabilitySet, Vec<CapabilityEvidence>) {
+        Self::resolve_with_market(model_id, metadata, None, existing)
+    }
+
+    pub fn resolve_with_market(
+        _model_id: &str,
+        metadata: &Value,
+        market_model: Option<&MarketModel>,
         existing: &[CapabilityEvidence],
     ) -> (CapabilitySet, Vec<CapabilityEvidence>) {
         let now = Utc::now().to_rfc3339();
@@ -57,8 +54,10 @@ impl CapabilityResolver {
             ),
         ];
 
-        evidence.extend(catalog_evidence(model_id, &now));
         evidence.extend(metadata_evidence(metadata, &now));
+        if let Some(market_model) = market_model {
+            evidence.extend(market_evidence(market_model, &now));
+        }
         evidence.extend(existing.iter().cloned());
 
         let mut chosen: BTreeMap<&str, &CapabilityEvidence> = BTreeMap::new();
@@ -78,7 +77,7 @@ impl CapabilityResolver {
             supports_images: chosen.get("images").is_some_and(|item| item.value),
             supports_reasoning,
             reasoning_efforts: if supports_reasoning {
-                reasoning_efforts(model_id, metadata)
+                reasoning_efforts(metadata)
             } else {
                 Vec::new()
             },
@@ -140,98 +139,38 @@ pub fn evidence(
     }
 }
 
-fn catalog_evidence(model_id: &str, now: &str) -> Vec<CapabilityEvidence> {
-    let id = model_id.to_ascii_lowercase();
-    let catalog_id = catalog_model_id(&id);
-    let mut result = Vec::new();
-
-    if id.contains("gpt-4o") || id.contains("gpt-4.1") || id.contains("gpt-5") {
-        result.push(evidence(
+fn market_evidence(model: &MarketModel, now: &str) -> Vec<CapabilityEvidence> {
+    vec![
+        evidence(
             "toolCall",
-            true,
-            EvidenceSource::Catalog,
-            "Known model family",
+            model.supports_tool_call(),
+            EvidenceSource::OpenRouter,
+            "OpenRouter supported_parameters",
             now,
-        ));
-        result.push(evidence(
+        ),
+        evidence(
             "images",
-            true,
-            EvidenceSource::Catalog,
-            "Known model family",
+            model.supports_images(),
+            EvidenceSource::OpenRouter,
+            "OpenRouter input_modalities",
             now,
-        ));
-    }
-    if id.contains("gpt-5")
-        || catalog_id.starts_with("o1")
-        || catalog_id.starts_with("o3")
-        || catalog_id.starts_with("o4")
-    {
-        result.push(evidence(
+        ),
+        evidence(
             "reasoning",
-            true,
-            EvidenceSource::Catalog,
-            "Known reasoning family",
+            model.supports_reasoning(),
+            EvidenceSource::OpenRouter,
+            "OpenRouter supported_parameters",
             now,
-        ));
-    }
-    if id.contains("claude-3") || id.contains("claude-4") {
-        result.push(evidence(
-            "toolCall",
-            true,
-            EvidenceSource::Catalog,
-            "Known model family",
-            now,
-        ));
-        result.push(evidence(
-            "images",
-            true,
-            EvidenceSource::Catalog,
-            "Known model family",
-            now,
-        ));
-    }
-    if reasoning_preset(model_id).is_some()
-        || id.contains("thinking")
-        || id.contains("reasoner")
-        || id.contains("deepseek-r1")
-    {
-        result.push(evidence(
-            "reasoning",
-            true,
-            EvidenceSource::Catalog,
-            if reasoning_preset(model_id).is_some() {
-                "Built-in reasoning preset"
-            } else {
-                "Model identifier hint"
-            },
-            now,
-        ));
-    }
-
-    result
+        ),
+    ]
 }
 
 fn metadata_evidence(metadata: &Value, now: &str) -> Vec<CapabilityEvidence> {
-    let mappings = [
-        (
-            "toolCall",
-            ["supports_tool_call", "supportsToolCall", "tool_call"],
-        ),
-        ("images", ["supports_images", "supportsImages", "vision"]),
-        (
-            "reasoning",
-            ["supports_reasoning", "supportsReasoning", "reasoning"],
-        ),
-    ];
-
-    let mut result: Vec<_> = mappings
+    let mut result: Vec<_> = ["toolCall", "images", "reasoning"]
         .into_iter()
-        .filter_map(|(capability, keys)| {
-            keys.into_iter().find_map(|key| {
-                metadata
-                    .get(key)
-                    .and_then(Value::as_bool)
-                    .map(|value| evidence(capability, value, EvidenceSource::Metadata, key, now))
+        .filter_map(|capability| {
+            metadata_capability(metadata, capability).map(|(value, detail)| {
+                evidence(capability, value, EvidenceSource::Metadata, detail, now)
             })
         })
         .collect();
@@ -250,6 +189,107 @@ fn metadata_evidence(metadata: &Value, now: &str) -> Vec<CapabilityEvidence> {
     }
 
     result
+}
+
+fn metadata_capability(metadata: &Value, capability: &str) -> Option<(bool, &'static str)> {
+    let (bool_paths, array_terms): (&[&str], &[&str]) = match capability {
+        "toolCall" => (
+            &[
+                "/supports_tool_call",
+                "/supportsToolCall",
+                "/tool_call",
+                "/capabilities/tool_call",
+                "/capabilities/toolCall",
+                "/capabilities/tools",
+            ],
+            &["tools", "tool_choice", "tool_call", "function_calling"],
+        ),
+        "images" => (
+            &[
+                "/supports_images",
+                "/supportsImages",
+                "/vision",
+                "/capabilities/images",
+                "/capabilities/vision",
+            ],
+            &["image", "images", "vision", "image_url"],
+        ),
+        "reasoning" => (
+            &[
+                "/supports_reasoning",
+                "/supportsReasoning",
+                "/capabilities/reasoning",
+                "/capabilities/thinking",
+            ],
+            &[
+                "reasoning",
+                "reasoning_effort",
+                "include_reasoning",
+                "thinking",
+            ],
+        ),
+        _ => return None,
+    };
+
+    if let Some((value, path)) = bool_paths.iter().find_map(|path| {
+        metadata
+            .pointer(path)
+            .and_then(Value::as_bool)
+            .map(|value| (value, *path))
+    }) {
+        return Some((value, path));
+    }
+
+    if capability == "reasoning"
+        && metadata
+            .get("reasoning")
+            .and_then(Value::as_object)
+            .is_some_and(|reasoning| {
+                [
+                    "effort",
+                    "defaultEffort",
+                    "supportedEfforts",
+                    "summary",
+                    "canDisableThinking",
+                ]
+                .iter()
+                .any(|key| reasoning.contains_key(*key))
+            })
+    {
+        return Some((true, "/reasoning"));
+    }
+
+    let array_paths: &[&str] = match capability {
+        "images" => &[
+            "/input_modalities",
+            "/inputModalities",
+            "/architecture/input_modalities",
+            "/capabilities",
+            "/features",
+        ],
+        _ => &[
+            "/supported_parameters",
+            "/supportedParameters",
+            "/capabilities",
+            "/features",
+        ],
+    };
+    array_paths.iter().find_map(|path| {
+        metadata
+            .pointer(path)
+            .and_then(Value::as_array)
+            .and_then(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|value| {
+                        array_terms
+                            .iter()
+                            .any(|term| value.eq_ignore_ascii_case(term))
+                    })
+                    .then_some((true, *path))
+            })
+    })
 }
 
 fn reasoning_effort_values(metadata: &Value) -> Option<&Vec<Value>> {
@@ -282,13 +322,9 @@ fn metadata_reasoning_efforts(metadata: &Value) -> Option<Vec<ReasoningEffort>> 
     })
 }
 
-fn reasoning_efforts(model_id: &str, metadata: &Value) -> Vec<String> {
+fn reasoning_efforts(metadata: &Value) -> Vec<String> {
     metadata_reasoning_efforts(metadata)
-        .unwrap_or_else(|| {
-            reasoning_preset(model_id)
-                .map(|preset| preset.supported_efforts.to_vec())
-                .unwrap_or_default()
-        })
+        .unwrap_or_default()
         .into_iter()
         .map(reasoning_effort_name)
         .map(ToString::to_string)
@@ -296,21 +332,31 @@ fn reasoning_efforts(model_id: &str, metadata: &Value) -> Vec<String> {
 }
 
 pub fn infer_vendor(model_id: &str) -> String {
-    let id = model_id.to_ascii_lowercase();
-    if id.contains("gpt") || id.starts_with('o') {
-        "openai"
-    } else if id.contains("claude") {
-        "anthropic"
-    } else if id.contains("gemini") {
-        "google"
-    } else if id.contains("deepseek") {
-        "deepseek"
-    } else if id.contains("qwen") {
-        "qwen"
-    } else {
-        "custom"
+    model_id
+        .split_once('/')
+        .and_then(|(namespace, _)| normalize_vendor(namespace))
+        .unwrap_or("custom")
+        .to_string()
+}
+
+pub fn infer_vendor_from_metadata(model_id: &str, metadata: &Value) -> String {
+    ["vendor", "provider", "owned_by", "ownedBy", "organization"]
+        .into_iter()
+        .find_map(|key| metadata_vendor(metadata.get(key)))
+        .and_then(normalize_vendor)
+        .map(ToString::to_string)
+        .unwrap_or_else(|| infer_vendor(model_id))
+}
+
+fn metadata_vendor(value: Option<&Value>) -> Option<&str> {
+    match value {
+        Some(Value::String(value)) => Some(value),
+        Some(Value::Object(value)) => value
+            .get("id")
+            .or_else(|| value.get("name"))
+            .and_then(Value::as_str),
+        _ => None,
     }
-    .to_string()
 }
 
 pub fn configuration_from_metadata(
@@ -318,23 +364,23 @@ pub fn configuration_from_metadata(
     metadata: &Value,
     capabilities: &CapabilitySet,
 ) -> ModelConfiguration {
+    configuration_from_sources(model_id, metadata, None, capabilities)
+}
+
+pub fn configuration_from_sources(
+    _model_id: &str,
+    metadata: &Value,
+    market_model: Option<&MarketModel>,
+    capabilities: &CapabilitySet,
+) -> ModelConfiguration {
     let reasoning_metadata = metadata.get("reasoning").filter(|value| value.is_object());
     let metadata_supported_efforts = metadata_reasoning_efforts(metadata);
-    let preset = capabilities
-        .supports_reasoning
-        .then(|| reasoning_preset(model_id))
-        .flatten();
     let supported_efforts = metadata_supported_efforts.clone().unwrap_or_else(|| {
-        preset.map_or_else(
-            || {
-                capabilities
-                    .reasoning_efforts
-                    .iter()
-                    .filter_map(|value| parse_reasoning_effort(value))
-                    .collect()
-            },
-            |value| value.supported_efforts.to_vec(),
-        )
+        capabilities
+            .reasoning_efforts
+            .iter()
+            .filter_map(|value| parse_reasoning_effort(value))
+            .collect()
     });
 
     ModelConfiguration {
@@ -342,11 +388,13 @@ pub fn configuration_from_metadata(
         max_input_tokens: optional_u64(
             metadata,
             &["maxInputTokens", "max_input_tokens", "context_window"],
-        ),
+        )
+        .or_else(|| market_model.and_then(|model| model.context_length)),
         max_output_tokens: optional_u64(
             metadata,
             &["maxOutputTokens", "max_output_tokens", "max_tokens"],
-        ),
+        )
+        .or_else(|| market_model.and_then(MarketModel::max_output_tokens)),
         temperature: optional_f64(metadata, &["temperature"]),
         only_reasoning: optional_bool(metadata, &["onlyReasoning", "only_reasoning"])
             .unwrap_or(false),
@@ -358,13 +406,7 @@ pub fn configuration_from_metadata(
             default_effort: reasoning_metadata
                 .and_then(|value| value.get("defaultEffort"))
                 .and_then(Value::as_str)
-                .and_then(parse_reasoning_effort)
-                .or_else(|| {
-                    metadata_supported_efforts
-                        .is_none()
-                        .then(|| preset.map(|value| value.default_effort))
-                        .flatten()
-                }),
+                .and_then(parse_reasoning_effort),
             supported_efforts,
             summary: reasoning_metadata
                 .and_then(|value| value.get("summary"))
@@ -373,50 +415,11 @@ pub fn configuration_from_metadata(
             can_disable_thinking: reasoning_metadata
                 .and_then(|value| value.get("canDisableThinking"))
                 .and_then(Value::as_bool)
-                .or_else(|| preset.map(|value| value.can_disable_thinking))
                 .unwrap_or(true),
         },
         use_custom_protocol: optional_bool(metadata, &["useCustomProtocol", "use_custom_protocol"])
             .unwrap_or(false),
     }
-}
-
-fn reasoning_preset(model_id: &str) -> Option<ReasoningPreset> {
-    let id = model_id.to_ascii_lowercase();
-    let id = catalog_model_id(&id);
-    let deepseek = ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-reasoner"]
-        .into_iter()
-        .any(|family| matches_model_family(id, family));
-
-    if deepseek {
-        Some(ReasoningPreset {
-            default_effort: ReasoningEffort::High,
-            supported_efforts: DEEPSEEK_REASONING_EFFORTS,
-            can_disable_thinking: true,
-        })
-    } else if id == "kimi-k3" {
-        Some(ReasoningPreset {
-            default_effort: ReasoningEffort::High,
-            supported_efforts: KIMI_K3_REASONING_EFFORTS,
-            can_disable_thinking: true,
-        })
-    } else {
-        None
-    }
-}
-
-fn catalog_model_id(model_id: &str) -> &str {
-    model_id.rsplit('/').next().unwrap_or(model_id)
-}
-
-fn matches_model_family(model_id: &str, family: &str) -> bool {
-    model_id == family
-        || model_id
-            .strip_prefix(family)
-            .and_then(|suffix| suffix.strip_prefix('-'))
-            .is_some_and(|suffix| {
-                !suffix.is_empty() && suffix.chars().all(|character| character.is_ascii_digit())
-            })
 }
 
 fn optional_u64(metadata: &Value, keys: &[&str]) -> Option<u64> {
@@ -435,13 +438,14 @@ fn optional_bool(metadata: &Value, keys: &[&str]) -> Option<bool> {
 }
 
 fn parse_reasoning_effort(value: &str) -> Option<ReasoningEffort> {
-    match value {
+    let normalized = value.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+    match normalized.as_str() {
         "minimal" => Some(ReasoningEffort::Minimal),
         "low" => Some(ReasoningEffort::Low),
         "medium" => Some(ReasoningEffort::Medium),
         "high" => Some(ReasoningEffort::High),
-        "xhigh" => Some(ReasoningEffort::Xhigh),
-        "max" => Some(ReasoningEffort::Max),
+        "xhigh" | "x_high" | "extra_high" => Some(ReasoningEffort::Xhigh),
+        "max" | "maximum" => Some(ReasoningEffort::Max),
         _ => None,
     }
 }
@@ -474,7 +478,11 @@ mod tests {
 
     #[test]
     fn manual_evidence_wins_over_all_other_sources() {
-        let metadata = serde_json::json!({ "supports_tool_call": true });
+        let metadata = serde_json::json!({
+            "supports_tool_call": true,
+            "supports_images": true,
+            "supports_reasoning": true
+        });
         let manual = evidence(
             "toolCall",
             false,
@@ -527,6 +535,100 @@ mod tests {
     }
 
     #[test]
+    fn resolves_openrouter_style_gateway_metadata() {
+        let metadata = serde_json::json!({
+            "supported_parameters": ["tools", "reasoning_effort"],
+            "architecture": {"input_modalities": ["text", "image"]}
+        });
+
+        let (capabilities, evidence) = CapabilityResolver::resolve("private-model", &metadata, &[]);
+
+        assert!(capabilities.supports_tool_call);
+        assert!(capabilities.supports_images);
+        assert!(capabilities.supports_reasoning);
+        assert!(evidence.iter().any(|item| {
+            item.capability == "images"
+                && item.source == EvidenceSource::Metadata
+                && item.detail == "/architecture/input_modalities"
+        }));
+    }
+
+    #[test]
+    fn openrouter_capabilities_override_gateway_metadata() {
+        let metadata = serde_json::json!({
+            "supportsImages": true,
+            "supportsToolCall": true,
+            "supportsReasoning": true
+        });
+        let market_model: MarketModel = serde_json::from_value(serde_json::json!({
+            "id": "openai/gpt-5.6",
+            "architecture": {
+                "input_modalities": ["text"],
+                "output_modalities": ["text"]
+            },
+            "supported_parameters": []
+        }))
+        .unwrap();
+
+        let (capabilities, _) =
+            CapabilityResolver::resolve_with_market("gpt-5.6", &metadata, Some(&market_model), &[]);
+
+        assert!(!capabilities.supports_tool_call);
+        assert!(!capabilities.supports_images);
+        assert!(!capabilities.supports_reasoning);
+    }
+
+    #[test]
+    fn records_openrouter_as_the_capability_source() {
+        let market_model: MarketModel = serde_json::from_value(serde_json::json!({
+            "id": "openai/gpt-5.6",
+            "architecture": {
+                "input_modalities": ["text"],
+                "output_modalities": ["text"]
+            },
+            "supported_parameters": []
+        }))
+        .unwrap();
+
+        let (capabilities, evidence) = CapabilityResolver::resolve_with_market(
+            "gpt-5.6",
+            &Value::Null,
+            Some(&market_model),
+            &[],
+        );
+
+        assert!(!capabilities.supports_tool_call);
+        assert!(!capabilities.supports_images);
+        assert!(!capabilities.supports_reasoning);
+        assert!(evidence.iter().any(|item| {
+            item.capability == "reasoning"
+                && item.source == EvidenceSource::OpenRouter
+                && item.detail == "OpenRouter supported_parameters"
+                && !item.value
+        }));
+    }
+
+    #[test]
+    fn normalizes_reasoning_effort_aliases_from_metadata() {
+        let metadata = serde_json::json!({
+            "reasoning": {
+                "supportedEfforts": ["x-high", "extra_high", "maximum"]
+            }
+        });
+        let capabilities = CapabilitySet {
+            supports_reasoning: true,
+            ..Default::default()
+        };
+
+        let configuration = configuration_from_metadata("private-model", &metadata, &capabilities);
+
+        assert_eq!(
+            configuration.reasoning.supported_efforts,
+            vec![ReasoningEffort::Xhigh, ReasoningEffort::Max]
+        );
+    }
+
+    #[test]
     fn resolves_complete_model_configuration_from_metadata() {
         let metadata = serde_json::json!({
             "max_input_tokens": 262144,
@@ -566,56 +668,7 @@ mod tests {
     }
 
     #[test]
-    fn applies_deepseek_reasoning_preset_to_namespaced_and_versioned_models() {
-        let model_id = "deepseek/deepseek-v4-pro-202606";
-        let (capabilities, _) = CapabilityResolver::resolve(model_id, &Value::Null, &[]);
-        let configuration = configuration_from_metadata(model_id, &Value::Null, &capabilities);
-
-        assert!(capabilities.supports_reasoning);
-        assert_eq!(capabilities.reasoning_efforts, vec!["high", "max"]);
-        assert_eq!(
-            configuration.reasoning.default_effort,
-            Some(ReasoningEffort::High)
-        );
-        assert_eq!(
-            configuration.reasoning.supported_efforts,
-            vec![ReasoningEffort::High, ReasoningEffort::Max]
-        );
-        assert!(configuration.reasoning.can_disable_thinking);
-    }
-
-    #[test]
-    fn applies_kimi_k3_reasoning_preset() {
-        let model_id = "moonshotai/kimi-k3";
-        let (capabilities, _) = CapabilityResolver::resolve(model_id, &Value::Null, &[]);
-        let configuration = configuration_from_metadata(model_id, &Value::Null, &capabilities);
-
-        assert!(capabilities.supports_reasoning);
-        assert_eq!(
-            configuration.reasoning.supported_efforts,
-            vec![
-                ReasoningEffort::Low,
-                ReasoningEffort::High,
-                ReasoningEffort::Max
-            ]
-        );
-        assert_eq!(
-            configuration.reasoning.default_effort,
-            Some(ReasoningEffort::High)
-        );
-    }
-
-    #[test]
-    fn does_not_apply_kimi_k3_preset_to_other_versions() {
-        let (capabilities, _) =
-            CapabilityResolver::resolve("moonshotai/kimi-k3-1", &Value::Null, &[]);
-
-        assert!(!capabilities.supports_reasoning);
-        assert!(capabilities.reasoning_efforts.is_empty());
-    }
-
-    #[test]
-    fn metadata_overrides_catalog_reasoning_preset() {
+    fn metadata_supplies_explicit_reasoning_efforts() {
         let model_id = "deepseek-v4-pro";
         let metadata = serde_json::json!({
             "supportsReasoning": true,
@@ -641,7 +694,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_empty_metadata_efforts_do_not_fall_back_to_catalog() {
+    fn explicit_empty_metadata_efforts_stay_empty() {
         let model_id = "deepseek-v4-flash";
         let metadata = serde_json::json!({
             "reasoning": {"supportedEfforts": []}

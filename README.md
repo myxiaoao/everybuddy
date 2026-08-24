@@ -11,7 +11,7 @@ EveryBuddy 是一个面向个人开发者的开源桌面应用，用于管理 Op
 - 同时管理多个 API Base URL 和 Bearer Token。
 - 远程 API 必须使用 HTTPS；HTTP 仅用于 `localhost`、`127.0.0.1` 和 `::1` 等 loopback 地址。
 - 通过 `GET /v1/models` 发现模型，也可在指定 API 来源下手动添加模型。
-- 根据 Catalog、API metadata、主动 Probe 和人工覆盖管理模型能力。
+- 使用 OpenRouter 公开模型目录匹配 Tool Call、Vision 和 Reasoning；无法匹配时回退 API metadata 和保守默认值。
 - 完整配置 Tool Call、Vision、Reasoning、`supportedEfforts` 和高级模型参数。
 - 启动时读取两个目标的现有配置，导入缺失的 API 来源并恢复模型选择状态。
 - 分别发布到 WorkBuddy、CodeBuddy，或使用补偿式事务同时发布到两个目标。

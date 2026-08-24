@@ -3,6 +3,7 @@ mod commands;
 mod error;
 mod gateway;
 mod gateway_service;
+mod market_catalog;
 mod models;
 mod publish;
 mod secrets;
@@ -46,7 +47,8 @@ pub fn run() {
             let store = Store::open(&data_dir.join("everybuddy.db"))
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
             let gateway_client =
-                GatewayClient::new().map_err(|error| std::io::Error::other(error.to_string()))?;
+                GatewayClient::new(Some(data_dir.join("openrouter-models-cache.json")))
+                    .map_err(|error| std::io::Error::other(error.to_string()))?;
             app.manage(AppState {
                 store,
                 secrets: Arc::new(SystemSecretStore),

@@ -15,6 +15,7 @@ use crate::{
     capability::{configuration_from_metadata, evidence, infer_vendor, CapabilityResolver},
     error::{CoreError, CoreResult},
     gateway::{normalize_api_root, object_without_secret, value_contains_secret},
+    market_catalog,
     models::{
         CapabilitySet, EvidenceSource, GatewayProfile, ManagedModel, TargetImportIssue,
         TargetImportReport, TargetKind, TargetModelState,
@@ -705,24 +706,9 @@ fn imported_gateway_name(target: TargetKind, api_root: &str) -> String {
 }
 
 fn normalized_vendor(raw: Option<&str>, model_id: &str) -> String {
-    let candidate = raw.unwrap_or_default().trim().to_ascii_lowercase();
-    if matches!(
-        candidate.as_str(),
-        "openai"
-            | "anthropic"
-            | "google"
-            | "deepseek"
-            | "qwen"
-            | "zhipu"
-            | "moonshot"
-            | "minimax"
-            | "xai"
-            | "mistral"
-    ) {
-        candidate
-    } else {
-        infer_vendor(model_id)
-    }
+    raw.and_then(market_catalog::normalize_vendor)
+        .map(ToString::to_string)
+        .unwrap_or_else(|| infer_vendor(model_id))
 }
 
 fn reasoning_effort_name(value: &crate::models::ReasoningEffort) -> &'static str {
