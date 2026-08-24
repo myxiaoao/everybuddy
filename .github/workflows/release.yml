@@ -120,7 +120,7 @@ jobs:
             Download only from this repository and verify SHA256SUMS.txt before installation.
           releaseDraft: true
           prerelease: true
-          includeUpdaterJson: true
+          uploadUpdaterJson: true
           args: --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json --ci
 
       - name: Verify macOS bundle output
