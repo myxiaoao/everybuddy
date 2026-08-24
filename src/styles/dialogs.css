@@ -52,6 +52,18 @@
   color: var(--color-accent-text);
 }
 
+.crash-state {
+  gap: var(--space-3);
+}
+
+.crash-state h1 {
+  margin-block: var(--space-1) 0;
+}
+
+.crash-state p {
+  margin-block-end: var(--space-2);
+}
+
 .onboarding-state {
   display: grid;
   grid-template-columns: 116px minmax(0, 460px);
@@ -178,6 +190,47 @@
   color: var(--color-text-secondary);
   font-size: var(--text-label);
   font-weight: 600;
+  line-height: var(--leading-ui);
+}
+
+.settings-form .app-information {
+  padding-block-start: var(--space-4);
+  border-block-start: 1px solid var(--color-border-subtle);
+}
+
+.app-information__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.app-version {
+  display: grid;
+  min-width: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-caption);
+  line-height: var(--leading-ui);
+}
+
+.app-version strong {
+  color: var(--color-text-primary);
+  font-size: var(--text-body);
+  font-variant-numeric: tabular-nums;
+}
+
+.app-information__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.update-check-status {
+  min-height: calc(var(--text-caption) * var(--leading-ui));
+  margin-block-start: var(--space-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--text-caption);
   line-height: var(--leading-ui);
 }
 
@@ -355,7 +408,8 @@
   justify-content: space-between;
   gap: var(--space-3);
   padding: 6px 0;
-  border-block-end: 1px solid color-mix(in oklab, var(--color-warning-text) 18%, transparent);
+  border-block-end: 1px solid
+    color-mix(in oklab, var(--color-warning-text) 18%, transparent);
   font-size: var(--text-caption);
   line-height: var(--leading-ui);
 }
@@ -501,23 +555,28 @@
 }
 
 .import-notice {
-  position: fixed;
-  z-index: 74;
-  inset-inline: 18px auto;
-  inset-block-end: 18px;
+  position: relative;
+  z-index: 1;
+  grid-row: 2;
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) auto auto;
   align-items: start;
   gap: var(--space-2);
-  width: min(560px, calc(100vw - 36px));
-  max-height: min(440px, calc(100vh - 100px));
+  width: 100%;
+  max-height: min(240px, 40vh);
   padding: 10px;
   overflow: auto;
   color: var(--color-text-primary);
   background: var(--color-bg-surface);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-floating);
+  border-block-end: 1px solid var(--color-border-strong);
+}
+
+.app-shell.has-import-notice {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.app-shell.has-import-notice .workspace {
+  grid-row: 3;
 }
 
 .import-notice > svg {
@@ -599,7 +658,11 @@
 
 .error-toast small {
   margin-block-start: 5px;
-  color: color-mix(in oklab, var(--color-danger-text) 80%, var(--color-text-primary));
+  color: color-mix(
+    in oklab,
+    var(--color-danger-text) 80%,
+    var(--color-text-primary)
+  );
   font-size: var(--text-caption);
   line-height: var(--leading-body);
   text-wrap: pretty;
@@ -622,5 +685,7 @@
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }

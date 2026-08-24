@@ -37,19 +37,35 @@ import {
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ImportNotice } from "./components/ImportNotice";
-import { deriveModelSelection } from "./lib/model-selection";
 import { useAppUpdater } from "./hooks/use-app-updater";
+import {
+  reportFrontendError,
+  reportFrontendWarning,
+} from "./lib/frontend-logger";
+import { useModelSelection } from "./hooks/use-model-selection";
+import { asAppError, localizedError } from "./lib/app-error";
+import {
+  defaultSettings,
+  displayTarget,
+  isTargetPublishable,
+  sameTargets,
+} from "./lib/target-utils";
 
 function App() {
   const [loading, setLoading] = useState(true);
   const [gateways, setGateways] = useState<GatewayProfile[]>([]);
   const [models, setModels] = useState<ManagedModel[]>([]);
   const [targets, setTargets] = useState<TargetStatus[]>([]);
-  const [targetModelStates, setTargetModelStates] = useState<TargetModelState[]>([]);
-  const [gatewayConnectionStates, setGatewayConnectionStates] = useState<Record<string, GatewayConnectionState>>({});
+  const [targetModelStates, setTargetModelStates] = useState<
+    TargetModelState[]
+  >([]);
+  const [gatewayConnectionStates, setGatewayConnectionStates] = useState<
+    Record<string, GatewayConnectionState>
+  >({});
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
-  const [selectedGatewayId, setSelectedGatewayId] = useState<string | null>(null);
-  const [selectionOverrides, setSelectionOverrides] = useState<Map<string, boolean>>(() => new Map());
+  const [selectedGatewayId, setSelectedGatewayId] = useState<string | null>(
+    null,
+  );
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
@@ -58,32 +74,60 @@ function App() {
   const [error, setError] = useState<AppError | null>(null);
   const [gatewayDialog, setGatewayDialog] = useState(false);
   const [manualModelDialog, setManualModelDialog] = useState(false);
-  const [editingGateway, setEditingGateway] = useState<GatewayProfile | null>(null);
+  const [editingGateway, setEditingGateway] = useState<GatewayProfile | null>(
+    null,
+  );
   const [editingGatewayToken, setEditingGatewayToken] = useState("");
   const [probeDialog, setProbeDialog] = useState(false);
   const [publishDialog, setPublishDialog] = useState(false);
-  const [publishPreview, setPublishPreview] = useState<PublishPreview | null>(null);
-  const [publishResult, setPublishResult] = useState<PublishResult | null>(null);
-  const [publishRequest, setPublishRequest] = useState<PreparePublishRequest | null>(null);
+  const [publishPreview, setPublishPreview] = useState<PublishPreview | null>(
+    null,
+  );
+  const [publishResult, setPublishResult] = useState<PublishResult | null>(
+    null,
+  );
+  const [publishRequest, setPublishRequest] =
+    useState<PreparePublishRequest | null>(null);
   const [settingsDialog, setSettingsDialog] = useState(false);
   const [backupsDialog, setBackupsDialog] = useState(false);
   const [backups, setBackups] = useState<BackupRecord[]>([]);
-  const [gatewayToDelete, setGatewayToDelete] = useState<GatewayProfile | null>(null);
-  const [backupToRestore, setBackupToRestore] = useState<BackupRecord | null>(null);
+  const [gatewayToDelete, setGatewayToDelete] = useState<GatewayProfile | null>(
+    null,
+  );
+  const [backupToRestore, setBackupToRestore] = useState<BackupRecord | null>(
+    null,
+  );
   const [discardDialog, setDiscardDialog] = useState(false);
   const [dirtyModelKey, setDirtyModelKey] = useState<string | null>(null);
   const [inspectorRevision, setInspectorRevision] = useState(0);
   const [compactView, setCompactView] = useState<WorkspaceView>("gateways");
-  const [importReport, setImportReport] = useState<TargetImportReport | null>(null);
+  const [importReport, setImportReport] = useState<TargetImportReport | null>(
+    null,
+  );
   const [importDetailsExpanded, setImportDetailsExpanded] = useState(false);
   const pendingActionRef = useRef<(() => void | Promise<void>) | null>(null);
-  const { availableUpdate, installingUpdate, installUpdate } = useAppUpdater();
-  const handleDirtyChange = useCallback((modelKey: string | null, changed: boolean) => {
-    setDirtyModelKey(changed ? modelKey : null);
-  }, []);
+  const targetPollErrorLoggedRef = useRef(false);
+  const {
+    currentVersion,
+    availableUpdate,
+    updateCheckStatus,
+    installingUpdate,
+    checkForUpdates,
+    installUpdate,
+  } = useAppUpdater();
+  const handleDirtyChange = useCallback(
+    (modelKey: string | null, changed: boolean) => {
+      setDirtyModelKey(changed ? modelKey : null);
+    },
+    [],
+  );
 
-  const t = useMemo(() => createTranslator(settings.language), [settings.language]);
-  const selectedGateway = gateways.find((gateway) => gateway.id === selectedGatewayId) ?? null;
+  const t = useMemo(
+    () => createTranslator(settings.language),
+    [settings.language],
+  );
+  const selectedGateway =
+    gateways.find((gateway) => gateway.id === selectedGatewayId) ?? null;
   const gatewayModels = useMemo(
     () => models.filter((model) => model.gatewayId === selectedGatewayId),
     [models, selectedGatewayId],
@@ -92,7 +136,9 @@ function App() {
     const needle = query.trim().toLocaleLowerCase();
     if (!needle) return gatewayModels;
     return gatewayModels.filter((model) =>
-      `${model.name} ${model.id} ${model.vendor}`.toLocaleLowerCase().includes(needle),
+      `${model.name} ${model.id} ${model.vendor}`
+        .toLocaleLowerCase()
+        .includes(needle),
     );
   }, [gatewayModels, query]);
   const activeModel = models.find((model) => model.key === activeKey) ?? null;
@@ -100,66 +146,103 @@ function App() {
     () => targets.filter(isTargetPublishable).map((target) => target.kind),
     [targets],
   );
-  const selectedTargets = settings.selectedTargets.filter((target) => publishableTargetKinds.includes(target));
-  const modelSelection = useMemo(
-    () => deriveModelSelection(models, targetModelStates, selectedTargets, selectionOverrides),
-    [models, selectionOverrides, selectedTargets, targetModelStates],
+  const selectedTargets = settings.selectedTargets.filter((target) =>
+    publishableTargetKinds.includes(target),
   );
-  const selectedKeys = modelSelection.checkedKeys;
-  const selectedModelCount = [...selectedKeys].filter((key) =>
-    gatewayModels.some((model) => model.key === key),
-  ).length;
+  const {
+    selection: modelSelection,
+    selectedKeys,
+    selectedModelCount,
+    toggleAll,
+    clearSelection,
+    toggleModel,
+    clearOverrides: clearSelectionOverrides,
+  } = useModelSelection({
+    models,
+    gatewayModels,
+    targetModelStates,
+    selectedTargets,
+  });
 
-  const loadTargets = useCallback(async (settingsSnapshot: AppSettings = settings) => {
-    try {
-      const [nextTargets, nextModelStates] = await Promise.all([
-        api.getTargetStatuses(),
-        api.getTargetModelStates(),
-      ]);
-      setTargets(nextTargets);
-      setTargetModelStates(nextModelStates);
-      const available = nextTargets.filter(isTargetPublishable).map((target) => target.kind);
-      const nextSelectedTargets = settingsSnapshot.selectedTargets.filter((target) => available.includes(target));
-      if (!sameTargets(settingsSnapshot.selectedTargets, nextSelectedTargets)) {
-        const nextSettings = { ...settingsSnapshot, selectedTargets: nextSelectedTargets };
-        setSettings(nextSettings);
-        await api.saveSettings(nextSettings);
+  const loadTargets = useCallback(
+    async (settingsSnapshot: AppSettings = settings) => {
+      try {
+        const [nextTargets, nextModelStates] = await Promise.all([
+          api.getTargetStatuses(),
+          api.getTargetModelStates(),
+        ]);
+        setTargets(nextTargets);
+        setTargetModelStates(nextModelStates);
+        targetPollErrorLoggedRef.current = false;
+        const available = nextTargets
+          .filter(isTargetPublishable)
+          .map((target) => target.kind);
+        const nextSelectedTargets = settingsSnapshot.selectedTargets.filter(
+          (target) => available.includes(target),
+        );
+        if (
+          !sameTargets(settingsSnapshot.selectedTargets, nextSelectedTargets)
+        ) {
+          const nextSettings = {
+            ...settingsSnapshot,
+            selectedTargets: nextSelectedTargets,
+          };
+          setSettings(nextSettings);
+          await api.saveSettings(nextSettings);
+        }
+        return nextModelStates;
+      } catch (caught) {
+        if (!targetPollErrorLoggedRef.current) {
+          reportFrontendWarning("target-state.refresh", caught);
+          targetPollErrorLoggedRef.current = true;
+        }
+        return null;
       }
-      return nextModelStates;
-    } catch {
-      // Polling failures stay quiet; the next direct action reports the error.
-      return null;
-    }
-  }, [settings]);
+    },
+    [settings],
+  );
 
   useEffect(() => {
     void (async () => {
       try {
         const data = await api.bootstrap();
-        const availableTargets = data.targets.filter(isTargetPublishable).map((target) => target.kind);
+        const availableTargets = data.targets
+          .filter(isTargetPublishable)
+          .map((target) => target.kind);
         const selectedTargets = data.settings.selectedTargets.length
-          ? data.settings.selectedTargets.filter((target) => availableTargets.includes(target))
+          ? data.settings.selectedTargets.filter((target) =>
+              availableTargets.includes(target),
+            )
           : availableTargets;
         setGateways(data.gateways);
-        setGatewayConnectionStates(Object.fromEntries(
-          data.gateways.map((gateway) => [gateway.id, "idle" as const]),
-        ));
+        setGatewayConnectionStates(
+          Object.fromEntries(
+            data.gateways.map((gateway) => [gateway.id, "idle" as const]),
+          ),
+        );
         setModels(data.models);
         setTargets(data.targets);
         setTargetModelStates(data.targetModelStates);
         setImportReport(
-          data.importReport.importedGatewayCount > 0
-            || data.importReport.importedModelCount > 0
-            || data.importReport.issues.length > 0
+          data.importReport.importedGatewayCount > 0 ||
+            data.importReport.importedModelCount > 0 ||
+            data.importReport.issues.length > 0
             ? data.importReport
             : null,
         );
-        if (data.importReport.importedGatewayCount > 0 || data.importReport.importedModelCount > 0) {
+        if (
+          data.importReport.importedGatewayCount > 0 ||
+          data.importReport.importedModelCount > 0 ||
+          data.importReport.issues.length > 0
+        ) {
           const bootstrapT = createTranslator(data.settings.language);
-          setMessage(bootstrapT("importSucceeded", {
-            gateways: data.importReport.importedGatewayCount,
-            models: data.importReport.importedModelCount,
-          }));
+          setMessage(
+            bootstrapT("importAnnouncement", {
+              gateways: data.importReport.importedGatewayCount,
+              models: data.importReport.importedModelCount,
+              issues: data.importReport.issues.length,
+            }),
+          );
         }
         const nextSettings = { ...data.settings, selectedTargets };
         setSettings(nextSettings);
@@ -168,7 +251,9 @@ function App() {
         }
         const firstGateway = data.gateways[0] ?? null;
         setSelectedGatewayId(firstGateway?.id ?? null);
-        const firstModel = data.models.find((model) => model.gatewayId === firstGateway?.id) ?? null;
+        const firstModel =
+          data.models.find((model) => model.gatewayId === firstGateway?.id) ??
+          null;
         setActiveKey(firstModel?.key ?? null);
         if (firstGateway) setCompactView("models");
       } catch (caught) {
@@ -202,6 +287,7 @@ function App() {
 
   function showError(caught: unknown) {
     const nextError = asAppError(caught);
+    reportFrontendError("application.operation", nextError);
     setError(nextError);
     setMessage("");
   }
@@ -230,7 +316,10 @@ function App() {
   }
 
   function selectGateway(id: string) {
-    if (id === selectedGatewayId) return;
+    if (id === selectedGatewayId) {
+      setCompactView("models");
+      return;
+    }
     runAfterDiscard(() => {
       setSelectedGatewayId(id);
       setQuery("");
@@ -277,10 +366,15 @@ function App() {
       setGateways((current) => {
         const exists = current.some((gateway) => gateway.id === profile.id);
         return exists
-          ? current.map((gateway) => (gateway.id === profile.id ? profile : gateway))
+          ? current.map((gateway) =>
+              gateway.id === profile.id ? profile : gateway,
+            )
           : [...current, profile].sort((a, b) => a.name.localeCompare(b.name));
       });
-      setGatewayConnectionStates((current) => ({ ...current, [profile.id]: "idle" }));
+      setGatewayConnectionStates((current) => ({
+        ...current,
+        [profile.id]: "idle",
+      }));
       setSelectedGatewayId(profile.id);
       closeGatewayDialog();
       await refreshModels(profile.id);
@@ -294,7 +388,10 @@ function App() {
 
   async function refreshModels(gatewayId: string) {
     setBusyGatewayId(gatewayId);
-    setGatewayConnectionStates((current) => ({ ...current, [gatewayId]: "refreshing" }));
+    setGatewayConnectionStates((current) => ({
+      ...current,
+      [gatewayId]: "refreshing",
+    }));
     setError(null);
     try {
       const discovered = await api.discoverModels(gatewayId);
@@ -303,10 +400,16 @@ function App() {
         ...discovered,
       ]);
       setActiveKey(discovered[0]?.key ?? null);
-      setGatewayConnectionStates((current) => ({ ...current, [gatewayId]: "connected" }));
+      setGatewayConnectionStates((current) => ({
+        ...current,
+        [gatewayId]: "connected",
+      }));
       setMessage(t("modelCount", { count: discovered.length }));
     } catch (caught) {
-      setGatewayConnectionStates((current) => ({ ...current, [gatewayId]: "error" }));
+      setGatewayConnectionStates((current) => ({
+        ...current,
+        [gatewayId]: "error",
+      }));
       showError(caught);
       throw caught;
     } finally {
@@ -323,7 +426,11 @@ function App() {
     setError(null);
     try {
       const model = await api.addManualModel(input);
-      setModels((current) => [...current, model].sort((left, right) => left.name.localeCompare(right.name)));
+      setModels((current) =>
+        [...current, model].sort((left, right) =>
+          left.name.localeCompare(right.name),
+        ),
+      );
       setActiveKey(model.key);
       setManualModelDialog(false);
       setCompactView("details");
@@ -345,13 +452,15 @@ function App() {
       await api.deleteGateway(gateway.id);
       const remaining = gateways.filter((item) => item.id !== gateway.id);
       setGateways(remaining);
-      setModels((current) => current.filter((model) => model.gatewayId !== gateway.id));
+      setModels((current) =>
+        current.filter((model) => model.gatewayId !== gateway.id),
+      );
       setSelectedGatewayId(remaining[0]?.id ?? null);
-      setSelectionOverrides((current) => {
-        const next = new Map(current);
-        for (const model of models.filter((item) => item.gatewayId === gateway.id)) next.delete(model.key);
-        return next;
-      });
+      clearSelectionOverrides(
+        models
+          .filter((item) => item.gatewayId === gateway.id)
+          .map((model) => model.key),
+      );
       setActiveKey(null);
       setGatewayConnectionStates((current) => {
         const next = { ...current };
@@ -365,23 +474,6 @@ function App() {
     } finally {
       setBusy(false);
     }
-  }
-
-  function toggleAll(visibleModels: ManagedModel[]) {
-    const allSelected = visibleModels.every((model) => selectedKeys.has(model.key));
-    setSelectionOverrides((current) => {
-      const next = new Map(current);
-      for (const model of visibleModels) next.set(model.key, !allSelected);
-      return next;
-    });
-  }
-
-  function clearSelection() {
-    setSelectionOverrides((current) => {
-      const next = new Map(current);
-      for (const model of gatewayModels) next.set(model.key, false);
-      return next;
-    });
   }
 
   function activateModel(key: string) {
@@ -401,22 +493,6 @@ function App() {
 
   function openProbe() {
     runAfterDiscard(() => setProbeDialog(true));
-  }
-
-  function toggleModel(key: string) {
-    setSelectionOverrides((current) => {
-      const next = new Map(current);
-      next.set(key, !selectedKeys.has(key));
-      return next;
-    });
-  }
-
-  function clearSelectionOverrides(keys: Iterable<string>) {
-    setSelectionOverrides((current) => {
-      const next = new Map(current);
-      for (const key of keys) next.delete(key);
-      return next;
-    });
   }
 
   async function saveModel(input: ModelUpdateInput) {
@@ -449,7 +525,9 @@ function App() {
   }
 
   function replaceModel(updated: ManagedModel) {
-    setModels((current) => current.map((model) => (model.key === updated.key ? updated : model)));
+    setModels((current) =>
+      current.map((model) => (model.key === updated.key ? updated : model)),
+    );
   }
 
   async function toggleTarget(target: TargetKind) {
@@ -471,7 +549,9 @@ function App() {
     if (!selectedGateway) return;
     const request: PreparePublishRequest = {
       gatewayId: selectedGateway.id,
-      modelIds: gatewayModels.filter((model) => selectedKeys.has(model.key)).map((model) => model.id),
+      modelIds: gatewayModels
+        .filter((model) => selectedKeys.has(model.key))
+        .map((model) => model.id),
       targets: selectedTargets,
     };
     setPublishRequest(request);
@@ -493,13 +573,19 @@ function App() {
     if (!publishRequest || !publishPreview) return;
     setBusy(true);
     try {
-      const result = await api.executePublish(publishRequest, publishPreview, acceptConflicts);
+      const result = await api.executePublish(
+        publishRequest,
+        publishPreview,
+        acceptConflicts,
+      );
       setPublishResult(result);
       setMessage(result.success ? t("published") : t("publishFailed"));
       await loadTargets();
       if (result.success) {
         clearSelectionOverrides(
-          publishRequest.modelIds.map((id) => `${publishRequest.gatewayId}::${id}`),
+          publishRequest.modelIds.map(
+            (id) => `${publishRequest.gatewayId}::${id}`,
+          ),
         );
       }
     } catch (caught) {
@@ -541,9 +627,13 @@ function App() {
       await api.restoreBackup(backup.id);
       setMessage(t("restore"));
       setBackups(await api.listBackups());
-      const previousKeys = targetModelStates.find((state) => state.target === backup.target)?.matchedModelKeys ?? [];
+      const previousKeys =
+        targetModelStates.find((state) => state.target === backup.target)
+          ?.matchedModelKeys ?? [];
       const nextStates = await loadTargets();
-      const restoredKeys = nextStates?.find((state) => state.target === backup.target)?.matchedModelKeys ?? [];
+      const restoredKeys =
+        nextStates?.find((state) => state.target === backup.target)
+          ?.matchedModelKeys ?? [];
       clearSelectionOverrides(new Set([...previousKeys, ...restoredKeys]));
       setBackupToRestore(null);
     } catch (caught) {
@@ -562,11 +652,22 @@ function App() {
   }
 
   if (loading) {
-    return <main className="startup-state"><LoaderCircle className="spin" aria-hidden="true" /><p>{t("loading")}</p></main>;
+    return (
+      <main className="startup-state">
+        <LoaderCircle className="spin" aria-hidden="true" />
+        <p>{t("loading")}</p>
+      </main>
+    );
   }
 
   if (error?.code === "DESKTOP_REQUIRED") {
-    return <main className="startup-state"><Cable aria-hidden="true" /><h1>{t("appName")}</h1><p>{t("desktopRequired")}</p></main>;
+    return (
+      <main className="startup-state">
+        <Cable aria-hidden="true" />
+        <h1>{t("appName")}</h1>
+        <p>{t("desktopRequired")}</p>
+      </main>
+    );
   }
 
   const hasGateway = gateways.length > 0;
@@ -576,214 +677,269 @@ function App() {
 
   return (
     <TooltipProvider delayDuration={350}>
-    <div className={`app-shell compact-view-${compactView}`}>
-      <a className="skip-link" href="#workspace">{t("skipWorkspace")}</a>
-      <CommandBar
-        gateway={selectedGateway}
-        modelCount={gatewayModels.length}
-        selectedModelCount={selectedModelCount}
-        selectedTargetCount={selectedTargets.length}
-        view={compactView}
-        refreshing={selectedGatewayRefreshing}
-        busy={busy}
-        t={t}
-        onNavigate={setCompactView}
-        onBack={() => setCompactView(compactView === "details" ? "models" : "gateways")}
-        onRefresh={() => selectedGatewayId && requestRefreshModels(selectedGatewayId)}
-        onPublish={() => void previewPublish()}
-      />
-
-      <main id="workspace" className="workspace">
-        <GatewaySidebar
-          gateways={gateways}
-          selectedId={selectedGatewayId}
-          busyId={busyGatewayId}
-          connectionStates={gatewayConnectionStates}
+      <div
+        className={`app-shell compact-view-${compactView}${importReport ? " has-import-notice" : ""}`}
+      >
+        <a
+          className="skip-link"
+          href="#workspace"
+          onClick={(event) => {
+            event.preventDefault();
+            document.getElementById("workspace")?.focus();
+          }}
+        >
+          {t("skipWorkspace")}
+        </a>
+        <CommandBar
+          gateway={selectedGateway}
+          modelCount={gatewayModels.length}
+          selectedModelCount={selectedModelCount}
+          selectedTargetCount={selectedTargets.length}
+          view={compactView}
+          refreshing={selectedGatewayRefreshing}
+          busy={busy}
           t={t}
-          onSelect={selectGateway}
-          onAdd={openAddGateway}
-          onEdit={(gateway) => void openEditGateway(gateway)}
-          onRefresh={requestRefreshModels}
-          onDelete={requestRemoveGateway}
-          onOpenSettings={() => setSettingsDialog(true)}
-          onOpenBackups={() => void openBackups()}
+          onNavigate={setCompactView}
+          onBack={() =>
+            setCompactView(compactView === "details" ? "models" : "gateways")
+          }
+          onRefresh={() =>
+            selectedGatewayId && requestRefreshModels(selectedGatewayId)
+          }
+          onPublish={() => runAfterDiscard(previewPublish)}
         />
 
-        {hasGateway ? (
-          <ModelList
-            key={selectedGatewayId ?? "no-gateway"}
-            models={filteredModels}
-            totalModelCount={gatewayModels.length}
-            query={query}
-            selectedKeys={selectedKeys}
-            indeterminateKeys={modelSelection.indeterminateKeys}
-            presentTargetsByKey={modelSelection.presentTargetsByKey}
-            selectedCount={selectedModelCount}
-            activeKey={activeKey}
-            disabled={selectedGatewayRefreshing}
+        {importReport ? (
+          <ImportNotice
+            report={importReport}
+            expanded={importDetailsExpanded}
             t={t}
-            onQueryChange={setQuery}
-            onToggleAll={toggleAll}
-            onToggle={toggleModel}
-            onClearSelection={clearSelection}
-            onAddManual={openManualModel}
-            onActivate={activateModel}
+            onToggle={() => setImportDetailsExpanded((current) => !current)}
+            onClose={() => setImportReport(null)}
           />
-        ) : (
-          <section className="model-panel onboarding-state">
-            <div className="onboarding-rail" aria-hidden="true"><span>API</span><span>models</span><span>targets</span></div>
-            <div><h1>{t("noGatewayTitle")}</h1><p>{t("noGatewayBody")}</p><Button type="button" onClick={openAddGateway}><Cable aria-hidden="true" size={17} />{t("addGateway")}</Button></div>
-          </section>
-        )}
+        ) : null}
 
-        <InspectorPanel
-          key={`${activeModel?.key ?? "none"}-${activeModel?.updatedAt ?? "none"}-${inspectorRevision}`}
-          model={activeModel}
-          selectedCount={selectedModelCount}
-          targets={targets}
-          selectedTargets={selectedTargets}
-          busy={busy || selectedGatewayRefreshing}
-          t={t}
-          onSaveModel={(input) => void saveModel(input)}
-          onProbe={openProbe}
-          onToggleTarget={(target) => void toggleTarget(target)}
-          onDirtyChange={handleDirtyChange}
-        />
-      </main>
+        <main id="workspace" className="workspace" tabIndex={-1}>
+          <GatewaySidebar
+            currentVersion={currentVersion}
+            gateways={gateways}
+            selectedId={selectedGatewayId}
+            busyId={busyGatewayId}
+            connectionStates={gatewayConnectionStates}
+            t={t}
+            onSelect={selectGateway}
+            onAdd={openAddGateway}
+            onEdit={(gateway) => void openEditGateway(gateway)}
+            onRefresh={requestRefreshModels}
+            onDelete={requestRemoveGateway}
+            onOpenSettings={() => setSettingsDialog(true)}
+            onOpenBackups={() => void openBackups()}
+          />
 
-      <div className="live-region" role="status" aria-live="polite">{message}</div>
-      {localizedErrorMessage && error?.code !== "DESKTOP_REQUIRED" ? (
-        <div className="error-toast" role="alert">
-          <strong>{localizedErrorMessage.title}</strong>
-          <span>{localizedErrorMessage.message}</span>
-          <small>{localizedErrorMessage.recovery}</small>
-          <Button variant="ghost" type="button" onClick={() => setError(null)}>{t("close")}</Button>
+          {hasGateway ? (
+            <ModelList
+              key={selectedGatewayId ?? "no-gateway"}
+              models={filteredModels}
+              totalModelCount={gatewayModels.length}
+              query={query}
+              selectedKeys={selectedKeys}
+              indeterminateKeys={modelSelection.indeterminateKeys}
+              presentTargetsByKey={modelSelection.presentTargetsByKey}
+              selectedCount={selectedModelCount}
+              activeKey={activeKey}
+              disabled={selectedGatewayRefreshing}
+              t={t}
+              onQueryChange={setQuery}
+              onToggleAll={toggleAll}
+              onToggle={toggleModel}
+              onClearSelection={clearSelection}
+              onAddManual={openManualModel}
+              onActivate={activateModel}
+            />
+          ) : (
+            <section className="model-panel onboarding-state">
+              <div className="onboarding-rail" aria-hidden="true">
+                <span>API</span>
+                <span>models</span>
+                <span>targets</span>
+              </div>
+              <div>
+                <h1>{t("noGatewayTitle")}</h1>
+                <p>{t("noGatewayBody")}</p>
+                <Button type="button" onClick={openAddGateway}>
+                  <Cable aria-hidden="true" size={17} />
+                  {t("addGateway")}
+                </Button>
+              </div>
+            </section>
+          )}
+
+          <InspectorPanel
+            key={`${activeModel?.key ?? "none"}-${activeModel?.updatedAt ?? "none"}-${inspectorRevision}`}
+            model={activeModel}
+            selectedCount={selectedModelCount}
+            targets={targets}
+            selectedTargets={selectedTargets}
+            busy={busy || selectedGatewayRefreshing}
+            t={t}
+            onSaveModel={(input) => void saveModel(input)}
+            onProbe={openProbe}
+            onToggleTarget={(target) => void toggleTarget(target)}
+            onDirtyChange={handleDirtyChange}
+          />
+        </main>
+
+        <div className="live-region" role="status" aria-live="polite">
+          {message}
         </div>
-      ) : null}
-      {availableUpdate ? (
-        <div className="update-banner" role="status">
-          <span>{t("updateAvailable", { version: availableUpdate.version })}</span>
-          <Button size="sm" type="button" onClick={() => void requestInstallUpdate()} disabled={installingUpdate}>
-            {installingUpdate ? <LoaderCircle className="spin" aria-hidden="true" size={16} /> : null}
-            {t("updateAndRestart")}
-          </Button>
-        </div>
-      ) : null}
-      {importReport ? (
-        <ImportNotice
-          report={importReport}
-          expanded={importDetailsExpanded}
-          t={t}
-          onToggle={() => setImportDetailsExpanded((current) => !current)}
-          onClose={() => setImportReport(null)}
-        />
-      ) : null}
-
-      {gatewayDialog ? <GatewayDialog open busy={busy} gateway={editingGateway} initialToken={editingGatewayToken} t={t} onClose={closeGatewayDialog} onSubmit={(input) => void saveGateway(input)} /> : null}
-      {manualModelDialog && selectedGateway ? <ManualModelDialog open busy={busy} gateway={selectedGateway} t={t} onClose={() => setManualModelDialog(false)} onSubmit={(input) => void saveManualModel(input)} /> : null}
-      {probeDialog ? <ProbeDialog open busy={busy} t={t} onClose={() => setProbeDialog(false)} onConfirm={() => void runProbe()} /> : null}
-      {publishDialog ? <PublishDialog key={publishPreview ? JSON.stringify(publishPreview.targets) : "loading"} open busy={busy} preview={publishPreview} result={publishResult} t={t} onClose={() => setPublishDialog(false)} onConfirm={(accepted) => void executePublish(accepted)} /> : null}
-      {settingsDialog ? <SettingsDialog open busy={busy} settings={settings} t={t} onClose={() => setSettingsDialog(false)} onSubmit={(next) => void saveSettings(next)} /> : null}
-      {backupsDialog ? <BackupsDialog open busy={busy} backups={backups} locale={locale} t={t} onClose={() => setBackupsDialog(false)} onRestore={setBackupToRestore} /> : null}
-      {gatewayToDelete ? (
-        <ConfirmationDialog
-          open
-          busy={busy}
-          destructive
-          title={t("deleteGatewayTitle")}
-          description={t("deleteGatewayConfirm", { name: gatewayToDelete.name })}
-          confirmLabel={t("deleteGatewayAction")}
-          t={t}
-          onClose={() => setGatewayToDelete(null)}
-          onConfirm={() => void removeGateway(gatewayToDelete)}
-        />
-      ) : null}
-      {backupToRestore ? (
-        <ConfirmationDialog
-          open
-          busy={busy}
-          title={t("restoreBackupTitle")}
-          description={t("restoreConfirm", {
-            target: displayTarget(backupToRestore.target),
-            date: new Date(backupToRestore.createdAt).toLocaleString(locale),
-          })}
-          confirmLabel={t("restoreBackupAction")}
-          t={t}
-          onClose={() => setBackupToRestore(null)}
-          onConfirm={() => void restoreBackup(backupToRestore)}
-        />
-      ) : null}
-      {discardDialog ? (
-        <ConfirmationDialog
-          open
-          busy={false}
-          destructive
-          title={t("discardChangesTitle")}
-          description={t("discardChangesBody", { name: activeModel?.name ?? t("unknown") })}
-          confirmLabel={t("discardChangesAction")}
-          t={t}
-          onClose={cancelDiscard}
-          onConfirm={discardChanges}
-        />
-      ) : null}
-    </div>
+        {localizedErrorMessage && error?.code !== "DESKTOP_REQUIRED" ? (
+          <div className="error-toast" role="alert">
+            <strong>{localizedErrorMessage.title}</strong>
+            <span>{localizedErrorMessage.message}</span>
+            <small>{localizedErrorMessage.recovery}</small>
+            <Button
+              variant="ghost"
+              type="button"
+              onClick={() => setError(null)}
+            >
+              {t("close")}
+            </Button>
+          </div>
+        ) : null}
+        {availableUpdate ? (
+          <div className="update-banner" role="status">
+            <span>
+              {t("updateAvailable", { version: availableUpdate.version })}
+            </span>
+            <Button
+              size="sm"
+              type="button"
+              onClick={() => void requestInstallUpdate()}
+              disabled={installingUpdate}
+            >
+              {installingUpdate ? (
+                <LoaderCircle className="spin" aria-hidden="true" size={16} />
+              ) : null}
+              {t("updateAndRestart")}
+            </Button>
+          </div>
+        ) : null}
+        {gatewayDialog ? (
+          <GatewayDialog
+            open
+            busy={busy}
+            gateway={editingGateway}
+            initialToken={editingGatewayToken}
+            t={t}
+            onClose={closeGatewayDialog}
+            onSubmit={(input) => void saveGateway(input)}
+          />
+        ) : null}
+        {manualModelDialog && selectedGateway ? (
+          <ManualModelDialog
+            open
+            busy={busy}
+            gateway={selectedGateway}
+            t={t}
+            onClose={() => setManualModelDialog(false)}
+            onSubmit={(input) => void saveManualModel(input)}
+          />
+        ) : null}
+        {probeDialog ? (
+          <ProbeDialog
+            open
+            busy={busy}
+            t={t}
+            onClose={() => setProbeDialog(false)}
+            onConfirm={() => void runProbe()}
+          />
+        ) : null}
+        {publishDialog ? (
+          <PublishDialog
+            open
+            busy={busy}
+            preview={publishPreview}
+            result={publishResult}
+            t={t}
+            onClose={() => setPublishDialog(false)}
+            onConfirm={(accepted) => void executePublish(accepted)}
+          />
+        ) : null}
+        {settingsDialog ? (
+          <SettingsDialog
+            open
+            busy={busy}
+            settings={settings}
+            currentVersion={currentVersion}
+            availableVersion={availableUpdate?.version ?? null}
+            updateCheckStatus={updateCheckStatus}
+            installingUpdate={installingUpdate}
+            t={t}
+            onClose={() => setSettingsDialog(false)}
+            onSubmit={(next) => void saveSettings(next)}
+            onCheckForUpdates={() => void checkForUpdates()}
+            onInstallUpdate={() => void requestInstallUpdate()}
+          />
+        ) : null}
+        {backupsDialog ? (
+          <BackupsDialog
+            open
+            busy={busy}
+            backups={backups}
+            locale={locale}
+            t={t}
+            onClose={() => setBackupsDialog(false)}
+            onRestore={setBackupToRestore}
+          />
+        ) : null}
+        {gatewayToDelete ? (
+          <ConfirmationDialog
+            open
+            busy={busy}
+            destructive
+            title={t("deleteGatewayTitle")}
+            description={t("deleteGatewayConfirm", {
+              name: gatewayToDelete.name,
+            })}
+            confirmLabel={t("deleteGatewayAction")}
+            t={t}
+            onClose={() => setGatewayToDelete(null)}
+            onConfirm={() => void removeGateway(gatewayToDelete)}
+          />
+        ) : null}
+        {backupToRestore ? (
+          <ConfirmationDialog
+            open
+            busy={busy}
+            title={t("restoreBackupTitle")}
+            description={t("restoreConfirm", {
+              target: displayTarget(backupToRestore.target),
+              date: new Date(backupToRestore.createdAt).toLocaleString(locale),
+            })}
+            confirmLabel={t("restoreBackupAction")}
+            t={t}
+            onClose={() => setBackupToRestore(null)}
+            onConfirm={() => void restoreBackup(backupToRestore)}
+          />
+        ) : null}
+        {discardDialog ? (
+          <ConfirmationDialog
+            open
+            busy={false}
+            destructive
+            title={t("discardChangesTitle")}
+            description={t("discardChangesBody", {
+              name: activeModel?.name ?? t("unknown"),
+            })}
+            confirmLabel={t("discardChangesAction")}
+            t={t}
+            onClose={cancelDiscard}
+            onConfirm={discardChanges}
+          />
+        ) : null}
+      </div>
     </TooltipProvider>
   );
 }
-
-function asAppError(error: unknown): AppError {
-  if (typeof error === "object" && error !== null && "code" in error && "message" in error) {
-    return { code: String(error.code), message: String(error.message) };
-  }
-  return { code: "UNEXPECTED_ERROR", message: error instanceof Error ? error.message : String(error) };
-}
-
-function isTargetPublishable(target: TargetStatus) {
-  return target.installed && target.writable && target.schema !== "invalid";
-}
-
-function sameTargets(left: TargetKind[], right: TargetKind[]) {
-  return left.length === right.length && left.every((target) => right.includes(target));
-}
-
-function localizedError(error: AppError, t: ReturnType<typeof createTranslator>) {
-  switch (error.code) {
-    case "AUTHENTICATION_ERROR":
-      return { title: t("errorAuthenticationTitle"), message: t("errorAuthenticationMessage"), recovery: t("errorAuthenticationRecovery") };
-    case "NETWORK_ERROR":
-      return { title: t("errorNetworkTitle"), message: t("errorNetworkMessage"), recovery: t("errorNetworkRecovery") };
-    case "PROTOCOL_ERROR":
-      return { title: t("errorProtocolTitle"), message: t("errorProtocolMessage"), recovery: t("errorProtocolRecovery") };
-    case "TARGET_ERROR":
-      return { title: t("errorTargetTitle"), message: t("errorTargetMessage"), recovery: t("errorTargetRecovery") };
-    case "DRIFT_ERROR":
-      return { title: t("errorDriftTitle"), message: t("errorDriftMessage"), recovery: t("errorDriftRecovery") };
-    case "CONFLICT_ERROR":
-      return { title: t("errorConflictTitle"), message: t("errorConflictMessage"), recovery: t("errorConflictRecovery") };
-    case "SECRET_STORE_ERROR":
-      return { title: t("errorSecretTitle"), message: t("errorSecretMessage"), recovery: t("errorSecretRecovery") };
-    case "STORAGE_ERROR":
-      return { title: t("errorStorageTitle"), message: t("errorStorageMessage"), recovery: t("errorStorageRecovery") };
-    case "VALIDATION_ERROR":
-    case "VALIDATION":
-      return { title: t("errorValidationTitle"), message: t("errorValidationMessage"), recovery: t("errorValidationRecovery") };
-    default:
-      return { title: t("connectionError"), message: t("errorUnexpectedMessage"), recovery: t("errorUnexpectedRecovery") };
-  }
-}
-
-function displayTarget(target: TargetKind) {
-  return target === "workbuddy" ? "WorkBuddy" : "CodeBuddy";
-}
-
-const defaultSettings: AppSettings = {
-  language: "zh-CN",
-  theme: "system",
-  selectedTargets: [],
-  targetPaths: {
-    workbuddy: "~/.workbuddy/models.json",
-    codebuddy: "~/.codebuddy/models.json",
-  },
-};
 
 export default App;

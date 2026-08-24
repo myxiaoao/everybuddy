@@ -1,4 +1,4 @@
-use std::{collections::HashSet, time::Duration};
+use std::{collections::HashSet, path::PathBuf, time::Duration};
 
 use chrono::Utc;
 use reqwest::{redirect::Policy, Client, StatusCode};
@@ -6,29 +6,38 @@ use serde_json::{json, Value};
 use url::{Host, Url};
 
 use crate::{
-    capability::{configuration_from_metadata, evidence, infer_vendor, CapabilityResolver},
+    capability::{
+        configuration_from_sources, evidence, infer_vendor_from_metadata, CapabilityResolver,
+    },
     error::{CoreError, CoreResult},
+    market_catalog::{MarketCatalogClient, MarketModel},
     models::{EvidenceSource, GatewayProfile, ManagedModel},
 };
 
 #[derive(Clone)]
 pub struct GatewayClient {
     client: Client,
+    market_catalog: MarketCatalogClient,
 }
 
 const MAX_GATEWAY_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_DISCOVERED_MODELS: usize = 10_000;
 
 impl GatewayClient {
-    pub fn new() -> CoreResult<Self> {
+    pub fn new(market_cache_path: Option<PathBuf>) -> CoreResult<Self> {
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(45))
             .redirect(Policy::none())
-            .user_agent("EveryBuddy/0.1")
+            .user_agent(concat!("EveryBuddy/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|error| CoreError::Network(error.to_string()))?;
-        Ok(Self { client })
+        let market_catalog =
+            MarketCatalogClient::new(client.clone(), !cfg!(test), market_cache_path);
+        Ok(Self {
+            client,
+            market_catalog,
+        })
     }
 
     pub async fn discover(
@@ -63,6 +72,7 @@ impl GatewayClient {
         let bytes = read_response_body(response, "The models response").await?;
         let body = parse_discovery_body(&bytes, token)?;
         let items = body["data"].as_array().expect("validated data array");
+        let market_catalog = self.market_catalog.snapshot().await;
         let now = Utc::now().to_rfc3339();
 
         items
@@ -99,11 +109,21 @@ impl GatewayClient {
                             .collect()
                     })
                     .unwrap_or_default();
-                let (capabilities, evidence) =
-                    CapabilityResolver::resolve(id, item, &preserved_evidence);
-                let configuration = existing_model
-                    .map(|model| model.configuration.clone())
-                    .unwrap_or_else(|| configuration_from_metadata(item, &capabilities));
+                let inferred_vendor = infer_vendor_from_metadata(id, item);
+                let market_model = market_catalog
+                    .as_deref()
+                    .and_then(|catalog| catalog.find(id, &inferred_vendor));
+                let vendor = market_model
+                    .and_then(MarketModel::vendor)
+                    .unwrap_or(inferred_vendor);
+                let (capabilities, evidence) = CapabilityResolver::resolve_with_market(
+                    id,
+                    item,
+                    market_model,
+                    &preserved_evidence,
+                );
+                let configuration =
+                    discovered_configuration(existing_model, id, item, market_model, &capabilities);
                 let mut metadata = object_without_secret(item);
                 if let Some(source) = existing_model
                     .and_then(|model| model.metadata.get("everybuddySource"))
@@ -113,13 +133,23 @@ impl GatewayClient {
                         object.insert("everybuddySource".to_string(), json!(source));
                     }
                 }
+                if let (Some(object), Some(market_model)) = (metadata.as_object_mut(), market_model)
+                {
+                    object.insert(
+                        "everybuddyOpenRouterMatch".to_string(),
+                        json!({
+                            "source": "openrouter",
+                            "modelId": market_model.id,
+                        }),
+                    );
+                }
 
                 Ok(ManagedModel {
                     key,
                     gateway_id: profile.id.clone(),
                     id: id.to_string(),
                     name: name.to_string(),
-                    vendor: infer_vendor(id),
+                    vendor,
                     capabilities,
                     configuration,
                     evidence,
@@ -128,6 +158,14 @@ impl GatewayClient {
                 })
             })
             .collect()
+    }
+
+    pub async fn market_model(&self, model_id: &str, vendor: &str) -> Option<MarketModel> {
+        self.market_catalog
+            .snapshot()
+            .await?
+            .find(model_id, vendor)
+            .cloned()
     }
 
     pub async fn probe(
@@ -264,6 +302,36 @@ impl GatewayClient {
         serde_json::from_slice(&bytes)
             .map_err(|_| CoreError::Protocol("Response is not valid JSON".to_string()))
     }
+}
+
+fn should_preserve_configuration(model: &ManagedModel) -> bool {
+    let local_source = matches!(
+        model
+            .metadata
+            .get("everybuddySource")
+            .and_then(Value::as_str),
+        Some("manual" | "targetImport")
+    );
+    local_source
+        || model
+            .evidence
+            .iter()
+            .any(|item| item.source == EvidenceSource::Manual)
+}
+
+fn discovered_configuration(
+    existing: Option<&ManagedModel>,
+    model_id: &str,
+    metadata: &Value,
+    market_model: Option<&crate::market_catalog::MarketModel>,
+    capabilities: &crate::models::CapabilitySet,
+) -> crate::models::ModelConfiguration {
+    existing
+        .filter(|model| should_preserve_configuration(model))
+        .map(|model| model.configuration.clone())
+        .unwrap_or_else(|| {
+            configuration_from_sources(model_id, metadata, market_model, capabilities)
+        })
 }
 
 async fn read_response_body(mut response: reqwest::Response, label: &str) -> CoreResult<Vec<u8>> {
@@ -590,7 +658,7 @@ mod tests {
             updated_at: "2026-08-20T00:00:00Z".to_string(),
         };
 
-        tauri::async_runtime::block_on(GatewayClient::new().unwrap().probe(
+        tauri::async_runtime::block_on(GatewayClient::new(None).unwrap().probe(
             &profile,
             "test-token",
             &model,
@@ -633,7 +701,7 @@ mod tests {
             updated_at: "2026-08-20T00:00:00Z".to_string(),
         };
 
-        let models = tauri::async_runtime::block_on(GatewayClient::new().unwrap().discover(
+        let models = tauri::async_runtime::block_on(GatewayClient::new(None).unwrap().discover(
             &profile,
             "test-token",
             &[],
@@ -644,6 +712,85 @@ mod tests {
         assert_eq!(models[0].id, "gpt-5.6");
         assert!(models[0].capabilities.supports_tool_call);
         server_thread.join().unwrap();
+    }
+
+    #[test]
+    fn refresh_reapplies_automatic_configuration_but_preserves_manual_configuration() {
+        let mut automatic = ManagedModel {
+            key: "gateway::deepseek-v4-pro".to_string(),
+            gateway_id: "gateway".to_string(),
+            id: "deepseek-v4-pro".to_string(),
+            name: "DeepSeek V4 Pro".to_string(),
+            vendor: "deepseek".to_string(),
+            capabilities: crate::models::CapabilitySet {
+                supports_reasoning: true,
+                reasoning_efforts: vec!["high".to_string(), "max".to_string()],
+                ..Default::default()
+            },
+            configuration: crate::models::ModelConfiguration {
+                reasoning: crate::models::ReasoningConfiguration {
+                    default_effort: Some(crate::models::ReasoningEffort::High),
+                    supported_efforts: vec![
+                        crate::models::ReasoningEffort::High,
+                        crate::models::ReasoningEffort::Max,
+                    ],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            evidence: Vec::new(),
+            metadata: json!({"id": "deepseek-v4-pro"}),
+            updated_at: "2026-08-20T00:00:00Z".to_string(),
+        };
+
+        let metadata = json!({
+            "supportsReasoning": true,
+            "reasoning": {
+                "defaultEffort": "low",
+                "supportedEfforts": ["low"]
+            }
+        });
+        let (capabilities, _) =
+            CapabilityResolver::resolve(&automatic.id, &metadata, &automatic.evidence);
+        let refreshed = discovered_configuration(
+            Some(&automatic),
+            &automatic.id,
+            &metadata,
+            None,
+            &capabilities,
+        );
+
+        assert_eq!(
+            refreshed.reasoning.supported_efforts,
+            vec![crate::models::ReasoningEffort::Low]
+        );
+
+        automatic.evidence.push(evidence(
+            "configuration",
+            true,
+            EvidenceSource::Manual,
+            "User override",
+            "2026-08-20T00:00:00Z",
+        ));
+        let preserved = discovered_configuration(
+            Some(&automatic),
+            &automatic.id,
+            &metadata,
+            None,
+            &capabilities,
+        );
+        assert_eq!(preserved, automatic.configuration);
+
+        automatic.evidence.clear();
+        automatic.metadata["everybuddySource"] = json!("targetImport");
+        let imported = discovered_configuration(
+            Some(&automatic),
+            &automatic.id,
+            &metadata,
+            None,
+            &capabilities,
+        );
+        assert_eq!(imported, automatic.configuration);
     }
 
     #[test]
@@ -670,7 +817,7 @@ mod tests {
             updated_at: "2026-08-20T00:00:00Z".to_string(),
         };
 
-        let error = tauri::async_runtime::block_on(GatewayClient::new().unwrap().discover(
+        let error = tauri::async_runtime::block_on(GatewayClient::new(None).unwrap().discover(
             &profile,
             "target-secret-value",
             &[],
@@ -703,7 +850,7 @@ mod tests {
             updated_at: Utc::now().to_rfc3339(),
         };
 
-        let error = tauri::async_runtime::block_on(GatewayClient::new().unwrap().discover(
+        let error = tauri::async_runtime::block_on(GatewayClient::new(None).unwrap().discover(
             &profile,
             "test-token",
             &[],

@@ -15,24 +15,49 @@ describe("ModelIcon", () => {
     ["kimi-k2", "Kimi K2", "moonshot", "kimi"],
     ["moonshot-v1", "Moonshot V1", "moonshot", "moonshot"],
     ["gemini-2.5-pro", "Gemini 2.5 Pro", "google", "gemini"],
+    ["minimax-m2.7", "MiniMax M2.7", "custom", "minimax"],
+    ["grok-4", "Grok 4", "x-ai", "xai"],
+    ["mistralai/mistral-large", "Mistral Large", "custom", "mistral"],
+    ["meta-llama/llama-4", "Llama 4", "custom", "meta"],
+    ["command-a", "Command A", "cohere", "cohere"],
+    ["hunyuan-2.0", "Hunyuan 2.0", "custom", "hunyuan"],
+    ["doubao-seed-1.6", "Doubao Seed", "custom", "doubao"],
+    ["ernie-5.0", "ERNIE 5.0", "custom", "baidu"],
+    ["yi-large", "Yi Large", "01ai", "yi"],
+    ["nova-pro", "Nova Pro", "amazon", "bedrock"],
+    ["nemotron-ultra", "Nemotron Ultra", "nvidia", "nvidia"],
+    ["sonar-pro", "Sonar Pro", "perplexity", "perplexity"],
+    ["private-model", "Private Model", "cerebras", "cerebras"],
   ])("resolves %s to the %s brand", (id, name, vendor, expected) => {
     expect(resolveModelIcon({ id, name, vendor })?.brand).toBe(expected);
   });
 
   it("keeps a text fallback for an unknown vendor", () => {
     const { container } = render(
-      <ModelIcon model={{ id: "private-model", name: "Private Model", vendor: "acme" }} />,
+      <ModelIcon
+        model={{ id: "private-model", name: "Private Model", vendor: "acme" }}
+      />,
     );
 
-    expect(container.querySelector("[data-model-brand='custom']")).toHaveTextContent("AC");
+    expect(
+      container.querySelector("[data-model-brand='custom']"),
+    ).toHaveTextContent("AC");
   });
 
   it("renders the colored DeepSeek asset without a monochrome mask", () => {
     const { container } = render(
-      <ModelIcon model={{ id: "deepseek-r1", name: "DeepSeek R1", vendor: "deepseek" }} />,
+      <ModelIcon
+        model={{ id: "deepseek-r1", name: "DeepSeek R1", vendor: "deepseek" }}
+      />,
     );
 
-    expect(container.querySelector("[data-model-brand='deepseek'] img")).toBeInTheDocument();
-    expect(container.querySelector("[data-model-brand='deepseek'] .vendor-mark__glyph")).not.toBeInTheDocument();
+    expect(
+      container.querySelector("[data-model-brand='deepseek'] img"),
+    ).toBeInTheDocument();
+    expect(
+      container.querySelector(
+        "[data-model-brand='deepseek'] .vendor-mark__glyph",
+      ),
+    ).not.toBeInTheDocument();
   });
 });

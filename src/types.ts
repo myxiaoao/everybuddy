@@ -1,9 +1,11 @@
 export type TargetKind = "workbuddy" | "codebuddy";
 export type Theme = "light" | "dark" | "system";
 export type Language = "zh-CN" | "en";
-export type EvidenceSource = "default" | "catalog" | "metadata" | "imported" | "probe" | "manual";
+export type EvidenceSource =
+  "default" | "metadata" | "openRouter" | "imported" | "probe" | "manual";
 export type TargetSchema = "missing" | "array" | "wrapped" | "invalid";
-export type GatewayConnectionState = "idle" | "refreshing" | "connected" | "error";
+export type GatewayConnectionState =
+  "idle" | "refreshing" | "connected" | "error";
 
 export interface GatewayProfile {
   id: string;
@@ -35,8 +37,10 @@ export interface CapabilitySet {
   reasoningEfforts: string[];
 }
 
-export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-export type ReasoningSummary = "auto" | "always" | "never" | "concise" | "detailed";
+export type ReasoningEffort =
+  "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ReasoningSummary =
+  "auto" | "always" | "never" | "concise" | "detailed";
 
 export interface ReasoningConfiguration {
   effort: ReasoningEffort | null;
@@ -65,7 +69,12 @@ export interface ModelUpdateInput {
 }
 
 export interface CapabilityEvidence {
-  capability: "toolCall" | "images" | "reasoning";
+  capability:
+    | "toolCall"
+    | "images"
+    | "reasoning"
+    | "configuration"
+    | "reasoningConfiguration";
   value: boolean;
   source: EvidenceSource;
   detail: string;

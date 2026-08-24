@@ -1,0 +1,7 @@
+# Default owner for all repository changes.
+* @myxiaoao
+
+# Release, signing, and Rust core changes always require owner review.
+/.github/ @myxiaoao
+/scripts/ @myxiaoao
+/src-tauri/ @myxiaoao

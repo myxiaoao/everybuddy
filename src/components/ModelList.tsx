@@ -1,10 +1,23 @@
 import { useMemo, useState } from "react";
-import { BrainCircuit, Image, Plus, Search, Wrench, X } from "lucide-react";
+import {
+  BrainCircuit,
+  CircleCheck,
+  CircleMinus,
+  Image,
+  Plus,
+  Search,
+  Wrench,
+  X,
+} from "lucide-react";
 import type { ManagedModel, TargetKind } from "../types";
 import type { createTranslator } from "../lib/i18n";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 
 type CapabilityFilter = "all" | "toolCall" | "images" | "reasoning";
@@ -47,14 +60,22 @@ export function ModelList({
   onActivate,
 }: ModelListProps) {
   const [filter, setFilter] = useState<CapabilityFilter>("all");
-  const visibleModels = useMemo(() => models.filter((model) => {
-    if (filter === "all") return true;
-    if (filter === "toolCall") return model.capabilities.supportsToolCall;
-    if (filter === "images") return model.capabilities.supportsImages;
-    return model.capabilities.supportsReasoning;
-  }), [filter, models]);
-  const allSelected = visibleModels.length > 0 && visibleModels.every((model) => selectedKeys.has(model.key));
-  const someSelected = visibleModels.some((model) => selectedKeys.has(model.key) || indeterminateKeys.has(model.key));
+  const visibleModels = useMemo(
+    () =>
+      models.filter((model) => {
+        if (filter === "all") return true;
+        if (filter === "toolCall") return model.capabilities.supportsToolCall;
+        if (filter === "images") return model.capabilities.supportsImages;
+        return model.capabilities.supportsReasoning;
+      }),
+    [filter, models],
+  );
+  const allSelected =
+    visibleModels.length > 0 &&
+    visibleModels.every((model) => selectedKeys.has(model.key));
+  const someSelected = visibleModels.some(
+    (model) => selectedKeys.has(model.key) || indeterminateKeys.has(model.key),
+  );
   const hasActiveFilters = Boolean(query.trim()) || filter !== "all";
 
   function clearFilters() {
@@ -73,11 +94,24 @@ export function ModelList({
           <label className="search-field">
             <span className="sr-only">{t("searchModels")}</span>
             <Search aria-hidden="true" size={17} />
-            <Input className="h-full min-h-0 border-0 bg-transparent p-0 shadow-none focus-visible:ring-0" value={query} onChange={(event) => onQueryChange(event.currentTarget.value)} placeholder={t("searchModels")} type="search" />
+            <Input
+              className="h-full min-h-0 border-0 bg-transparent p-0 shadow-none focus-visible:ring-0"
+              value={query}
+              onChange={(event) => onQueryChange(event.currentTarget.value)}
+              placeholder={t("searchModels")}
+              type="search"
+            />
           </label>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="secondary" className="manual-model-button" type="button" onClick={onAddManual} aria-label={t("addManualModel")} disabled={disabled}>
+              <Button
+                variant="secondary"
+                className="manual-model-button"
+                type="button"
+                onClick={onAddManual}
+                aria-label={t("addManualModel")}
+                disabled={disabled}
+              >
                 <Plus aria-hidden="true" size={16} />
                 <span>{t("addManualModelShort")}</span>
               </Button>
@@ -88,15 +122,48 @@ export function ModelList({
       </div>
 
       <div className="model-controlbar">
-        <div className="model-filters" role="group" aria-label={t("filterCapabilities")}>
-          <FilterButton label={t("allModels")} active={filter === "all"} onClick={() => setFilter("all")} />
-          <FilterButton label={t("filterToolCall")} active={filter === "toolCall"} icon={<Wrench />} onClick={() => setFilter("toolCall")} />
-          <FilterButton label={t("filterImages")} active={filter === "images"} icon={<Image />} onClick={() => setFilter("images")} />
-          <FilterButton label={t("filterReasoning")} active={filter === "reasoning"} icon={<BrainCircuit />} onClick={() => setFilter("reasoning")} />
+        <div
+          className="model-filters"
+          role="group"
+          aria-label={t("filterCapabilities")}
+        >
+          <FilterButton
+            label={t("allModels")}
+            active={filter === "all"}
+            onClick={() => setFilter("all")}
+          />
+          <FilterButton
+            label={t("filterToolCall")}
+            active={filter === "toolCall"}
+            icon={<Wrench />}
+            onClick={() => setFilter("toolCall")}
+          />
+          <FilterButton
+            label={t("filterImages")}
+            active={filter === "images"}
+            icon={<Image />}
+            onClick={() => setFilter("images")}
+          />
+          <FilterButton
+            label={t("filterReasoning")}
+            active={filter === "reasoning"}
+            icon={<BrainCircuit />}
+            onClick={() => setFilter("reasoning")}
+          />
         </div>
-        <div className={`selection-slot${selectedCount > 0 ? " is-visible" : ""}`} aria-live="polite">
+        <div
+          className={`selection-slot${selectedCount > 0 ? " is-visible" : ""}`}
+          aria-live="polite"
+        >
           <span>{t("selectedCount", { count: selectedCount })}</span>
-          <Button variant="ghost" size="icon-sm" type="button" onClick={onClearSelection} aria-label={t("clearSelection")} disabled={selectedCount === 0}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            type="button"
+            onClick={onClearSelection}
+            aria-label={t("clearSelection")}
+            disabled={selectedCount === 0}
+          >
             <X aria-hidden="true" size={15} />
           </Button>
         </div>
@@ -106,14 +173,31 @@ export function ModelList({
         <div className="model-table" role="table" aria-label={t("models")}>
           <div className="model-table__header" role="row">
             <div className="model-check" role="columnheader">
-              <Checkbox checked={allSelected ? true : someSelected ? "indeterminate" : false} onCheckedChange={() => onToggleAll(visibleModels)} aria-label={t("selectAll")} />
+              <Checkbox
+                checked={
+                  allSelected ? true : someSelected ? "indeterminate" : false
+                }
+                onCheckedChange={() => onToggleAll(visibleModels)}
+                aria-label={t("selectAll")}
+              />
             </div>
-            <span className="model-table__identity-header" role="columnheader">{t("modelId")}</span>
-            <span className="model-table__capabilities-header" role="columnheader">{t("capabilities")}</span>
+            <span className="model-table__identity-header" role="columnheader">
+              {t("modelId")}
+            </span>
+            <span
+              className="model-table__capabilities-header"
+              role="columnheader"
+            >
+              {t("capabilities")}
+            </span>
           </div>
           <div className="model-table__body" role="rowgroup">
             {visibleModels.map((model) => (
-              <div className={`model-row${activeKey === model.key ? " is-active" : ""}`} role="row" key={model.key}>
+              <div
+                className={`model-row${activeKey === model.key ? " is-active" : ""}`}
+                role="row"
+                key={model.key}
+              >
                 <div className="model-check" role="cell">
                   <ModelSelectionCheckbox
                     model={model}
@@ -127,16 +211,30 @@ export function ModelList({
                 <div className="model-row__identity-cell" role="cell">
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <button className="model-row__identity" type="button" onClick={() => onActivate(model.key)}>
+                      <button
+                        className="model-row__identity"
+                        type="button"
+                        onClick={() => onActivate(model.key)}
+                        aria-current={
+                          activeKey === model.key ? "true" : undefined
+                        }
+                      >
                         <span className="model-row__name">
                           <strong>{model.name}</strong>
-                          {model.metadata.everybuddySource === "manual" ? <small>{t("manualModelBadge")}</small> : null}
-                          {model.metadata.everybuddySource === "targetImport" ? <small>{t("importedModelBadge")}</small> : null}
+                          {model.metadata.everybuddySource === "manual" ? (
+                            <small>{t("manualModelBadge")}</small>
+                          ) : null}
+                          {model.metadata.everybuddySource ===
+                          "targetImport" ? (
+                            <small>{t("importedModelBadge")}</small>
+                          ) : null}
                         </span>
                         <code className="model-row__id">{model.id}</code>
                       </button>
                     </TooltipTrigger>
-                    <TooltipContent><code className="model-id-tooltip">{model.id}</code></TooltipContent>
+                    <TooltipContent>
+                      <code className="model-id-tooltip">{model.id}</code>
+                    </TooltipContent>
                   </Tooltip>
                 </div>
                 <div
@@ -148,9 +246,39 @@ export function ModelList({
                     `${t("reasoning")}: ${model.capabilities.supportsReasoning ? t("supported") : t("unsupported")}`,
                   ].join(", ")}
                 >
-                  <CapabilityIcon enabled={model.capabilities.supportsToolCall} label={t("toolCall")} stateLabel={model.capabilities.supportsToolCall ? t("supported") : t("unsupported")}><Wrench /></CapabilityIcon>
-                  <CapabilityIcon enabled={model.capabilities.supportsImages} label={t("images")} stateLabel={model.capabilities.supportsImages ? t("supported") : t("unsupported")}><Image /></CapabilityIcon>
-                  <CapabilityIcon enabled={model.capabilities.supportsReasoning} label={t("reasoning")} stateLabel={model.capabilities.supportsReasoning ? t("supported") : t("unsupported")}><BrainCircuit /></CapabilityIcon>
+                  <CapabilityIcon
+                    enabled={model.capabilities.supportsToolCall}
+                    label={t("toolCall")}
+                    stateLabel={
+                      model.capabilities.supportsToolCall
+                        ? t("supported")
+                        : t("unsupported")
+                    }
+                  >
+                    <Wrench />
+                  </CapabilityIcon>
+                  <CapabilityIcon
+                    enabled={model.capabilities.supportsImages}
+                    label={t("images")}
+                    stateLabel={
+                      model.capabilities.supportsImages
+                        ? t("supported")
+                        : t("unsupported")
+                    }
+                  >
+                    <Image />
+                  </CapabilityIcon>
+                  <CapabilityIcon
+                    enabled={model.capabilities.supportsReasoning}
+                    label={t("reasoning")}
+                    stateLabel={
+                      model.capabilities.supportsReasoning
+                        ? t("supported")
+                        : t("unsupported")
+                    }
+                  >
+                    <BrainCircuit />
+                  </CapabilityIcon>
                 </div>
               </div>
             ))}
@@ -158,11 +286,19 @@ export function ModelList({
         </div>
       ) : (
         <div className="empty-state">
-          <div className="empty-state__glyph" aria-hidden="true"><Search size={24} /></div>
-          <h2>{totalModelCount > 0 && hasActiveFilters ? t("noMatchingModelsTitle") : t("noModelsTitle")}</h2>
+          <div className="empty-state__glyph" aria-hidden="true">
+            <Search size={24} />
+          </div>
+          <h2>
+            {totalModelCount > 0 && hasActiveFilters
+              ? t("noMatchingModelsTitle")
+              : t("noModelsTitle")}
+          </h2>
           <p>
             {totalModelCount > 0 && hasActiveFilters
-              ? t("noMatchingModelsBody", { query: query.trim() || t("activeCapabilityFilter") })
+              ? t("noMatchingModelsBody", {
+                  query: query.trim() || t("activeCapabilityFilter"),
+                })
               : t("noModelsBody")}
           </p>
           {totalModelCount > 0 && hasActiveFilters ? (
@@ -217,18 +353,49 @@ function displayTarget(target: TargetKind) {
   return target === "workbuddy" ? "WorkBuddy" : "CodeBuddy";
 }
 
-function FilterButton({ label, active, icon, onClick }: { label: string; active: boolean; icon?: React.ReactElement; onClick: () => void }) {
+function FilterButton({
+  label,
+  active,
+  icon,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  icon?: React.ReactElement;
+  onClick: () => void;
+}) {
   const button = (
-    <button className={`model-filter${active ? " is-active" : ""}`} type="button" onClick={onClick} aria-pressed={active} aria-label={label}>
+    <button
+      className={`model-filter${active ? " is-active" : ""}`}
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      aria-label={label}
+    >
       {icon ?? <span>{label}</span>}
     </button>
   );
 
   if (!icon) return button;
-  return <Tooltip><TooltipTrigger asChild>{button}</TooltipTrigger><TooltipContent>{label}</TooltipContent></Tooltip>;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{button}</TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
 }
 
-function CapabilityIcon({ enabled, label, stateLabel, children }: { enabled: boolean; label: string; stateLabel: string; children: React.ReactElement<{ size?: number; "aria-hidden"?: boolean }> }) {
+function CapabilityIcon({
+  enabled,
+  label,
+  stateLabel,
+  children,
+}: {
+  enabled: boolean;
+  label: string;
+  stateLabel: string;
+  children: React.ReactElement<{ size?: number; "aria-hidden"?: boolean }>;
+}) {
   const description = `${label}: ${stateLabel}`;
 
   return (
@@ -236,6 +403,11 @@ function CapabilityIcon({ enabled, label, stateLabel, children }: { enabled: boo
       <TooltipTrigger asChild>
         <span className={enabled ? "is-enabled" : ""} aria-hidden="true">
           {children}
+          {enabled ? (
+            <CircleCheck className="capability-state-icon" />
+          ) : (
+            <CircleMinus className="capability-state-icon" />
+          )}
         </span>
       </TooltipTrigger>
       <TooltipContent>{description}</TooltipContent>

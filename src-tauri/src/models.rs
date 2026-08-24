@@ -101,9 +101,10 @@ pub struct ModelConfiguration {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
 pub enum EvidenceSource {
+    #[serde(alias = "catalog")]
     Default,
-    Catalog,
     Metadata,
+    OpenRouter,
     Imported,
     Probe,
     Manual,
@@ -358,4 +359,17 @@ pub struct ProbeSummary {
     pub model: ManagedModel,
     pub request_count: usize,
     pub notes: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EvidenceSource;
+
+    #[test]
+    fn legacy_catalog_evidence_deserializes_as_default() {
+        let source: EvidenceSource = serde_json::from_str("\"catalog\"").unwrap();
+
+        assert_eq!(source, EvidenceSource::Default);
+        assert_eq!(serde_json::to_string(&source).unwrap(), "\"default\"");
+    }
 }

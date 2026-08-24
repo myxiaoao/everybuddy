@@ -22,16 +22,8 @@ const config = {
   },
 };
 
-const thumbprint = process.env.WINDOWS_CERTIFICATE_THUMBPRINT?.trim();
-if (thumbprint) {
-  config.bundle.windows = {
-    certificateThumbprint: thumbprint,
-    digestAlgorithm: "sha256",
-    timestampUrl: "http://timestamp.digicert.com",
-    tsp: false,
-  };
-}
-
 await mkdir(path.dirname(output), { recursive: true });
-await writeFile(output, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+await writeFile(output, `${JSON.stringify(config, null, 2)}\n`, {
+  mode: 0o600,
+});
 console.log(`Prepared ${output}.`);

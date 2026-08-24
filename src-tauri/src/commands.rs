@@ -6,15 +6,16 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::{
-    capability::{infer_vendor, CapabilityResolver},
+    capability::{configuration_from_sources, evidence, infer_vendor, CapabilityResolver},
     error::CommandError,
     gateway::normalize_api_root,
     gateway_service::GatewayService,
+    market_catalog::MarketModel,
     models::{
-        AppSettings, BackupRecord, BootstrapData, ExecutePublishRequest, GatewayInput,
-        GatewayProfile, ManagedModel, ManualModelInput, ModelConfiguration, ModelUpdateInput,
-        PreparePublishRequest, ProbeSummary, PublishPreview, PublishResult, SaveSettingsInput,
-        TargetKind, TargetModelState, TargetStatus,
+        AppSettings, BackupRecord, BootstrapData, EvidenceSource, ExecutePublishRequest,
+        GatewayInput, GatewayProfile, ManagedModel, ManualModelInput, ModelConfiguration,
+        ModelUpdateInput, PreparePublishRequest, ProbeSummary, PublishPreview, PublishResult,
+        SaveSettingsInput, TargetKind, TargetModelState, TargetStatus,
     },
     publish::PublishCoordinator,
     target::{default_target_paths, target_statuses},
@@ -143,7 +144,7 @@ pub async fn discover_models(
 }
 
 #[tauri::command]
-pub fn add_manual_model(
+pub async fn add_manual_model(
     input: ManualModelInput,
     state: State<'_, AppState>,
 ) -> CommandResult<ManagedModel> {
@@ -167,7 +168,19 @@ pub fn add_manual_model(
         .into());
     }
 
-    let model = build_manual_model(&input.gateway_id, id, &input.name, &input.vendor);
+    let lookup_vendor = if input.vendor.trim().is_empty() {
+        infer_vendor(id)
+    } else {
+        input.vendor.trim().to_ascii_lowercase()
+    };
+    let market_model = state.gateway_client.market_model(id, &lookup_vendor).await;
+    let model = build_manual_model(
+        &input.gateway_id,
+        id,
+        &input.name,
+        &input.vendor,
+        market_model.as_ref(),
+    );
     state.store.save_model(&model).map_err(CommandError::from)?;
     Ok(model)
 }
@@ -224,6 +237,10 @@ pub fn update_model(
     }
     let configuration = normalize_model_configuration(input.configuration, &input.capabilities)
         .map_err(CommandError::from)?;
+    let reasoning_configuration_changed = model.configuration.only_reasoning
+        != configuration.only_reasoning
+        || model.configuration.reasoning != configuration.reasoning;
+    let configuration_changed = model.configuration != configuration;
     if model.capabilities != input.capabilities {
         CapabilityResolver::apply_manual(&mut model, input.capabilities);
     } else {
@@ -231,6 +248,23 @@ pub fn update_model(
     }
     model.name = name.to_string();
     model.vendor = vendor.to_ascii_lowercase();
+    if configuration_changed {
+        let capability = if reasoning_configuration_changed {
+            "reasoningConfiguration"
+        } else {
+            "configuration"
+        };
+        model
+            .evidence
+            .retain(|item| item.source != EvidenceSource::Manual || item.capability != capability);
+        model.evidence.push(evidence(
+            capability,
+            true,
+            EvidenceSource::Manual,
+            "User override",
+            &Utc::now().to_rfc3339(),
+        ));
+    }
     model.configuration = configuration;
     state.store.save_model(&model).map_err(CommandError::from)?;
     Ok(model)
@@ -403,18 +437,29 @@ fn normalize_model_configuration(
     Ok(configuration)
 }
 
-fn build_manual_model(gateway_id: &str, id: &str, name: &str, vendor: &str) -> ManagedModel {
-    let vendor = if vendor.trim().is_empty() {
+fn build_manual_model(
+    gateway_id: &str,
+    id: &str,
+    name: &str,
+    vendor: &str,
+    market_model: Option<&MarketModel>,
+) -> ManagedModel {
+    let fallback_vendor = if vendor.trim().is_empty() {
         infer_vendor(id)
     } else {
         vendor.trim().to_ascii_lowercase()
     };
+    let vendor = market_model
+        .and_then(MarketModel::vendor)
+        .unwrap_or(fallback_vendor);
     let metadata = json!({
         "id": id,
         "owned_by": vendor,
         "everybuddySource": "manual"
     });
-    let (capabilities, evidence) = CapabilityResolver::resolve(id, &metadata, &[]);
+    let (capabilities, evidence) =
+        CapabilityResolver::resolve_with_market(id, &metadata, market_model, &[]);
+    let configuration = configuration_from_sources(id, &metadata, market_model, &capabilities);
 
     ManagedModel {
         key: format!("{gateway_id}::{id}"),
@@ -427,7 +472,7 @@ fn build_manual_model(gateway_id: &str, id: &str, name: &str, vendor: &str) -> M
         },
         vendor,
         capabilities,
-        configuration: Default::default(),
+        configuration,
         evidence,
         metadata,
         updated_at: Utc::now().to_rfc3339(),
@@ -457,20 +502,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manual_model_uses_catalog_capabilities_and_source_marker() {
-        let model = build_manual_model("gateway-1", "gpt-5.6", "Private GPT", "");
+    fn manual_model_uses_openrouter_capabilities_and_source_marker() {
+        let market_model: MarketModel = serde_json::from_value(serde_json::json!({
+            "id": "openai/gpt-5.6",
+            "architecture": {
+                "input_modalities": ["text", "image"],
+                "output_modalities": ["text"]
+            },
+            "supported_parameters": ["tools", "reasoning_effort"]
+        }))
+        .unwrap();
+        let model = build_manual_model(
+            "gateway-1",
+            "gpt-5.6",
+            "Private GPT",
+            "",
+            Some(&market_model),
+        );
 
         assert_eq!(model.key, "gateway-1::gpt-5.6");
         assert_eq!(model.name, "Private GPT");
         assert_eq!(model.vendor, "openai");
         assert!(model.capabilities.supports_tool_call);
+        assert!(model.capabilities.supports_images);
+        assert!(model.capabilities.supports_reasoning);
+        assert!(model.capabilities.reasoning_efforts.is_empty());
         assert_eq!(model.metadata["everybuddySource"], "manual");
     }
 
     #[test]
+    fn manual_model_without_openrouter_match_uses_conservative_defaults() {
+        let model = build_manual_model("gateway-1", "private-model", "", "", None);
+
+        assert_eq!(model.vendor, "custom");
+        assert_eq!(model.capabilities, Default::default());
+        assert!(model.configuration.reasoning.supported_efforts.is_empty());
+    }
+
+    #[test]
     fn refresh_preserves_only_manual_models_missing_from_discovery() {
-        let manual = build_manual_model("gateway-1", "private-model", "Private", "custom");
-        let discovered = build_manual_model("gateway-1", "upstream-model", "Upstream", "custom");
+        let manual = build_manual_model("gateway-1", "private-model", "Private", "custom", None);
+        let discovered =
+            build_manual_model("gateway-1", "upstream-model", "Upstream", "custom", None);
         let mut refreshed = vec![discovered.clone()];
 
         preserve_local_models(&mut refreshed, &[manual.clone(), discovered]);
@@ -481,7 +554,8 @@ mod tests {
 
     #[test]
     fn refresh_preserves_imported_models_missing_from_discovery() {
-        let mut imported = build_manual_model("gateway-1", "target-model", "Imported", "custom");
+        let mut imported =
+            build_manual_model("gateway-1", "target-model", "Imported", "custom", None);
         imported.metadata["everybuddySource"] = json!("targetImport");
         imported.evidence[0].source = crate::models::EvidenceSource::Imported;
         let mut refreshed = Vec::new();

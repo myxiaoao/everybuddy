@@ -4,7 +4,9 @@ import { describe, expect, it } from "vitest";
 
 const entryCss = readFileSync(resolve(process.cwd(), "src/App.css"), "utf8");
 const css = [...entryCss.matchAll(/@import "(\.\/styles\/[^"]+)";/g)]
-  .map(([, stylesheet]) => readFileSync(resolve(process.cwd(), "src", stylesheet), "utf8"))
+  .map(([, stylesheet]) =>
+    readFileSync(resolve(process.cwd(), "src", stylesheet), "utf8"),
+  )
   .join("\n");
 
 function themeBlock(selector: string) {
@@ -40,6 +42,8 @@ describe("ChatGPT surface mapping", () => {
   );
 
   it("uses the selected surface for the active gateway", () => {
-    expect(css).toMatch(/\.gateway-item\.is-selected \{[^}]*background: var\(--color-bg-selected\);/s);
+    expect(css).toMatch(
+      /\.gateway-item\.is-selected \{[^}]*background: var\(--color-bg-selected\);/s,
+    );
   });
 });
