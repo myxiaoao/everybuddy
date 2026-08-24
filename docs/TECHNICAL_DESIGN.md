@@ -97,7 +97,7 @@ SQLite 文件位于 Tauri `app_data_dir/everybuddy.db`。
 - `backups`：记录来源、SHA-256 Fingerprint 和创建时间，每个目标保留最近 10 份。
 - `app_settings`：保存语言、主题、最近目标选择和自定义路径。
 
-模型记录包含上游 ID、名称、Vendor、Capability、Model Configuration、Evidence 和清理后的原始 metadata。清理逻辑递归遍历 Object 和 Array，字段名转为小写并忽略 `_`、`-` 后，移除 `apiKey`、`token`、`accessToken`、`refreshToken`、`authorization`、`password`、`secret`、`clientSecret` 和 `credentials` 等 secret-like 字段。响应或导入 metadata 回显当前 Token 时直接拒绝，错误信息不包含原值。模型刷新会更新上游 metadata 和 Capability，但保留用户保存的 Model Configuration，以及 `Imported`、`Probe`、`Manual` Evidence；写入前同时比较 API Profile 与模型版本快照，避免刷新期间的本地编辑被旧响应覆盖。
+模型记录包含上游 ID、名称、Vendor、Capability、Model Configuration、Evidence 和清理后的原始 metadata。清理逻辑递归遍历 Object 和 Array，字段名转为小写并忽略 `_`、`-` 后，移除 `apiKey`、`token`、`accessToken`、`refreshToken`、`authorization`、`password`、`secret`、`clientSecret` 和 `credentials` 等 secret-like 字段。响应或导入 metadata 回显当前 Token 时直接拒绝，错误信息不包含原值。模型刷新会更新上游 metadata 和 Capability；未人工修改的发现模型重新解析 Model Configuration，手动添加、Target 导入或存在 `Manual` Evidence 的模型保留本地配置。`Imported`、`Probe`、`Manual` Evidence 在刷新时继续保留。写入前同时比较 API Profile 与模型版本快照，避免刷新期间的本地编辑被旧响应覆盖。
 
 ## 6. Gateway 协议
 
@@ -136,6 +136,10 @@ Probe 只能由用户确认后执行，一次最多发送 3 个最小请求：
 证据优先级固定为：`manual` > `probe` > `imported` > `metadata` > `catalog` > `default`。未知模型的 Tool Call、Vision、Reasoning 均默认为 `false`。Target 导入、Probe 和人工覆盖会写入独立 Evidence，并在后续模型刷新时保留。
 
 Capability 表达模型是否具备某项能力，Model Configuration 表达 WorkBuddy 调用模型时使用的参数。两者分开持久化，避免模型刷新覆盖人工配置。
+
+Reasoning 强度按模型解析，不为所有 Reasoning 模型套用统一档位。解析顺序为：API metadata 明确给出的 `reasoning.supportedEfforts`、内置稳定 Preset、空数组保守回退。显式空数组表示不展示强度选项，不能回退到 Catalog。当前稳定 Preset 仅覆盖已验证的 DeepSeek V4/Reasoner（`high`、`max`，默认 `high`）和 Kimi K3（`low`、`high`、`max`，默认 `high`），并支持 Gateway 命名空间前缀与 DeepSeek 版本后缀。未知模型不推测强度，用户可在高级配置中人工覆盖。
+
+Reasoning Probe 只验证 `low` 参数是否被接受以及响应中是否出现可验证的 Reasoning 输出，不枚举全部强度。枚举会产生额外请求和 Token 消耗，因此不能把单次 Probe 结果声明为完整 `supportedEfforts`。
 
 | 参数来源                | `models.json` 字段                                                                                                               |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
@@ -239,19 +243,19 @@ Reasoning Effort 支持 `minimal`、`low`、`medium`、`high`、`xhigh` 和 `max
 
 ## 11. IPC 接口
 
-| Command                               | 作用                                                                     |
-| ------------------------------------- | ------------------------------------------------------------------------ |
-| `bootstrap`                           | 执行一次启动导入，返回 Gateway、模型、目标、模型匹配状态、导入报告和设置 |
-| `save_gateway` / `delete_gateway`     | 管理 Gateway Profile 和系统凭据                                          |
-| `discover_models`                     | 调用 `/v1/models`，更新发现快照并保留未被上游返回的手动模型              |
-| `add_manual_model`                    | 在指定 Gateway 下创建模型，使用 Catalog 和保守默认值解析初始 Capability  |
-| `probe_model`                         | 执行 3 个用户确认的能力请求                                              |
-| `update_model`                        | 保存模型名称、Vendor、人工能力覆盖和完整 Model Configuration             |
-| `get_target_statuses`                 | 读取 schema、权限、Fingerprint 和 Drift                                  |
-| `get_target_model_states`             | 只读匹配两个 Target 中的模型，不导入凭据或模型                           |
-| `prepare_publish` / `execute_publish` | 执行两阶段发布                                                           |
-| `list_backups` / `restore_backup`     | 查询和恢复备份                                                           |
-| `save_settings`                       | 保存语言、主题、目标和路径                                               |
+| Command                               | 作用                                                                                                           |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `bootstrap`                           | 执行一次启动导入，返回 Gateway、模型、目标、模型匹配状态、导入报告和设置                                       |
+| `save_gateway` / `delete_gateway`     | 管理 Gateway Profile 和系统凭据                                                                                |
+| `discover_models`                     | 调用 `/v1/models`，更新发现快照并保留未被上游返回的手动模型                                                    |
+| `add_manual_model`                    | 在指定 Gateway 下创建模型，使用与自动发现相同的 Catalog 和保守默认值解析初始 Capability 与 Model Configuration |
+| `probe_model`                         | 执行 3 个用户确认的能力请求                                                                                    |
+| `update_model`                        | 保存模型名称、Vendor、人工能力覆盖和完整 Model Configuration                                                   |
+| `get_target_statuses`                 | 读取 schema、权限、Fingerprint 和 Drift                                                                        |
+| `get_target_model_states`             | 只读匹配两个 Target 中的模型，不导入凭据或模型                                                                 |
+| `prepare_publish` / `execute_publish` | 执行两阶段发布                                                                                                 |
+| `list_backups` / `restore_backup`     | 查询和恢复备份                                                                                                 |
+| `save_settings`                       | 保存语言、主题、目标和路径                                                                                     |
 
 错误使用 `{ code, message }` 返回，禁止携带请求 Header、Token 或完整响应 Body。
 

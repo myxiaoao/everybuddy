@@ -91,10 +91,17 @@ describe("EveryBuddy workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: /GPT-5\.6.*gpt-5\.6/ }));
     fireEvent.click(screen.getByText("高级配置"));
 
+    expect(
+      screen.getByText("已根据模型信息自动匹配，可按 API 文档调整。"),
+    ).toBeInTheDocument();
+
     fireEvent.change(screen.getByRole("spinbutton", { name: "输入" }), {
       target: { value: "262144" },
     });
     fireEvent.click(screen.getByRole("checkbox", { name: "超高" }));
+    expect(
+      screen.getByText("当前选择已覆盖自动匹配结果。"),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("switch", { name: "自定义协议" }));
     fireEvent.click(screen.getByRole("button", { name: "保存模型配置" }));
 

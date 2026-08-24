@@ -261,6 +261,7 @@ export function InspectorPanel({
 
                 {capabilities.supportsReasoning ? (
                   <ReasoningFields
+                    model={model}
                     configuration={configuration}
                     t={t}
                     onChange={setConfiguration}
@@ -485,15 +486,18 @@ function ConfigToggle({
 }
 
 function ReasoningFields({
+  model,
   configuration,
   t,
   onChange,
 }: {
+  model: ManagedModel;
   configuration: ModelConfiguration;
   t: ReturnType<typeof createTranslator>;
   onChange: (configuration: ModelConfiguration) => void;
 }) {
   const effortGroupId = useId();
+  const effortHintId = `${effortGroupId}-hint`;
   const updateReasoning = (reasoning: ModelConfiguration["reasoning"]) => {
     onChange({ ...configuration, reasoning });
   };
@@ -549,8 +553,15 @@ function ReasoningFields({
           })
         }
       />
-      <fieldset className="effort-fieldset" aria-labelledby={effortGroupId}>
+      <fieldset
+        className="effort-fieldset"
+        aria-labelledby={effortGroupId}
+        aria-describedby={effortHintId}
+      >
         <legend id={effortGroupId}>{t("supportedEfforts")}</legend>
+        <p id={effortHintId} className="effort-fieldset__hint">
+          {reasoningEffortHint(model, configuration, t)}
+        </p>
         <div className="effort-grid">
           {reasoningEfforts.map((effort) => {
             const id = `${effortGroupId}-${effort}`;
@@ -622,6 +633,29 @@ function ReasoningFields({
       </ConfigField>
     </ConfigGroup>
   );
+}
+
+function reasoningEffortHint(
+  model: ManagedModel,
+  configuration: ModelConfiguration,
+  t: ReturnType<typeof createTranslator>,
+) {
+  const hasSavedOverride = model.evidence.some(
+    (item) =>
+      item.capability === "reasoningConfiguration" && item.source === "manual",
+  );
+  const hasDraftOverride =
+    model.configuration.onlyReasoning !== configuration.onlyReasoning ||
+    JSON.stringify(model.configuration.reasoning) !==
+      JSON.stringify(configuration.reasoning);
+
+  if (hasSavedOverride || hasDraftOverride) {
+    return t("reasoningEffortsOverridden");
+  }
+  if (configuration.reasoning.supportedEfforts.length === 0) {
+    return t("reasoningEffortsUnknown");
+  }
+  return t("reasoningEffortsResolved");
 }
 
 function EffortSelect({

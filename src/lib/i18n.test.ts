@@ -15,5 +15,8 @@ describe("translator", () => {
       "支持的思考强度",
     );
     expect(createTranslator("en")("unsupported")).toBe("Unsupported");
+    expect(createTranslator("zh-CN")("reasoningEffortsUnknown")).toBe(
+      "未发现可靠范围，请按 API 文档确认。",
+    );
   });
 });

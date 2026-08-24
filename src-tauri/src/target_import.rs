@@ -601,7 +601,7 @@ impl ParsedEntry {
         let (mut capabilities, evidence) =
             CapabilityResolver::resolve(&model_id, &metadata, &imported_evidence);
         capabilities.reasoning_efforts = imported_capabilities.reasoning_efforts;
-        let configuration = configuration_from_metadata(raw, &capabilities);
+        let configuration = configuration_from_metadata(&model_id, raw, &capabilities);
         let name = object
             .get("name")
             .and_then(Value::as_str)

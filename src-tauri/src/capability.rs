@@ -11,6 +11,21 @@ use crate::models::{
 #[derive(Debug, Clone)]
 pub struct CapabilityResolver;
 
+#[derive(Debug, Clone, Copy)]
+struct ReasoningPreset {
+    default_effort: ReasoningEffort,
+    supported_efforts: &'static [ReasoningEffort],
+    can_disable_thinking: bool,
+}
+
+const DEEPSEEK_REASONING_EFFORTS: &[ReasoningEffort] =
+    &[ReasoningEffort::High, ReasoningEffort::Max];
+const KIMI_K3_REASONING_EFFORTS: &[ReasoningEffort] = &[
+    ReasoningEffort::Low,
+    ReasoningEffort::High,
+    ReasoningEffort::Max,
+];
+
 impl CapabilityResolver {
     pub fn resolve(
         model_id: &str,
@@ -57,11 +72,16 @@ impl CapabilityResolver {
             }
         }
 
+        let supports_reasoning = chosen.get("reasoning").is_some_and(|item| item.value);
         let capabilities = CapabilitySet {
             supports_tool_call: chosen.get("toolCall").is_some_and(|item| item.value),
             supports_images: chosen.get("images").is_some_and(|item| item.value),
-            supports_reasoning: chosen.get("reasoning").is_some_and(|item| item.value),
-            reasoning_efforts: reasoning_efforts(metadata),
+            supports_reasoning,
+            reasoning_efforts: if supports_reasoning {
+                reasoning_efforts(model_id, metadata)
+            } else {
+                Vec::new()
+            },
         };
 
         (capabilities, evidence)
@@ -69,9 +89,13 @@ impl CapabilityResolver {
 
     pub fn apply_manual(model: &mut ManagedModel, capabilities: CapabilitySet) {
         let now = Utc::now().to_rfc3339();
-        model
-            .evidence
-            .retain(|item| item.source != EvidenceSource::Manual);
+        model.evidence.retain(|item| {
+            item.source != EvidenceSource::Manual
+                || !matches!(
+                    item.capability.as_str(),
+                    "toolCall" | "images" | "reasoning"
+                )
+        });
         model.evidence.extend([
             evidence(
                 "toolCall",
@@ -118,6 +142,7 @@ pub fn evidence(
 
 fn catalog_evidence(model_id: &str, now: &str) -> Vec<CapabilityEvidence> {
     let id = model_id.to_ascii_lowercase();
+    let catalog_id = catalog_model_id(&id);
     let mut result = Vec::new();
 
     if id.contains("gpt-4o") || id.contains("gpt-4.1") || id.contains("gpt-5") {
@@ -136,7 +161,10 @@ fn catalog_evidence(model_id: &str, now: &str) -> Vec<CapabilityEvidence> {
             now,
         ));
     }
-    if id.contains("gpt-5") || id.starts_with("o1") || id.starts_with("o3") || id.starts_with("o4")
+    if id.contains("gpt-5")
+        || catalog_id.starts_with("o1")
+        || catalog_id.starts_with("o3")
+        || catalog_id.starts_with("o4")
     {
         result.push(evidence(
             "reasoning",
@@ -162,12 +190,20 @@ fn catalog_evidence(model_id: &str, now: &str) -> Vec<CapabilityEvidence> {
             now,
         ));
     }
-    if id.contains("thinking") || id.contains("reasoner") || id.contains("deepseek-r1") {
+    if reasoning_preset(model_id).is_some()
+        || id.contains("thinking")
+        || id.contains("reasoner")
+        || id.contains("deepseek-r1")
+    {
         result.push(evidence(
             "reasoning",
             true,
             EvidenceSource::Catalog,
-            "Model identifier hint",
+            if reasoning_preset(model_id).is_some() {
+                "Built-in reasoning preset"
+            } else {
+                "Model identifier hint"
+            },
             now,
         ));
     }
@@ -188,7 +224,7 @@ fn metadata_evidence(metadata: &Value, now: &str) -> Vec<CapabilityEvidence> {
         ),
     ];
 
-    mappings
+    let mut result: Vec<_> = mappings
         .into_iter()
         .filter_map(|(capability, keys)| {
             keys.into_iter().find_map(|key| {
@@ -198,10 +234,25 @@ fn metadata_evidence(metadata: &Value, now: &str) -> Vec<CapabilityEvidence> {
                     .map(|value| evidence(capability, value, EvidenceSource::Metadata, key, now))
             })
         })
-        .collect()
+        .collect();
+
+    let has_explicit_reasoning = result.iter().any(|item| item.capability == "reasoning");
+    if !has_explicit_reasoning
+        && metadata_reasoning_efforts(metadata).is_some_and(|efforts| !efforts.is_empty())
+    {
+        result.push(evidence(
+            "reasoning",
+            true,
+            EvidenceSource::Metadata,
+            "reasoning.supportedEfforts",
+            now,
+        ));
+    }
+
+    result
 }
 
-fn reasoning_efforts(metadata: &Value) -> Vec<String> {
+fn reasoning_effort_values(metadata: &Value) -> Option<&Vec<Value>> {
     metadata
         .pointer("/reasoning/supportedEfforts")
         .and_then(Value::as_array)
@@ -214,15 +265,34 @@ fn reasoning_efforts(metadata: &Value) -> Vec<String> {
             .into_iter()
             .find_map(|key| metadata.get(key).and_then(Value::as_array))
         })
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(Value::as_str)
-                .filter(|value| parse_reasoning_effort(value).is_some())
-                .map(ToString::to_string)
-                .collect()
+}
+
+fn metadata_reasoning_efforts(metadata: &Value) -> Option<Vec<ReasoningEffort>> {
+    reasoning_effort_values(metadata).map(|values| {
+        values
+            .iter()
+            .filter_map(Value::as_str)
+            .filter_map(parse_reasoning_effort)
+            .fold(Vec::new(), |mut efforts, effort| {
+                if !efforts.contains(&effort) {
+                    efforts.push(effort);
+                }
+                efforts
+            })
+    })
+}
+
+fn reasoning_efforts(model_id: &str, metadata: &Value) -> Vec<String> {
+    metadata_reasoning_efforts(metadata)
+        .unwrap_or_else(|| {
+            reasoning_preset(model_id)
+                .map(|preset| preset.supported_efforts.to_vec())
+                .unwrap_or_default()
         })
-        .unwrap_or_default()
+        .into_iter()
+        .map(reasoning_effort_name)
+        .map(ToString::to_string)
+        .collect()
 }
 
 pub fn infer_vendor(model_id: &str) -> String {
@@ -244,41 +314,28 @@ pub fn infer_vendor(model_id: &str) -> String {
 }
 
 pub fn configuration_from_metadata(
+    model_id: &str,
     metadata: &Value,
     capabilities: &CapabilitySet,
 ) -> ModelConfiguration {
     let reasoning_metadata = metadata.get("reasoning").filter(|value| value.is_object());
-    let supported_efforts = reasoning_metadata
-        .and_then(|reasoning| reasoning.get("supportedEfforts"))
-        .and_then(Value::as_array)
-        .or_else(|| {
-            [
-                "reasoning_efforts",
-                "supported_reasoning_efforts",
-                "supportedEfforts",
-            ]
-            .into_iter()
-            .find_map(|key| metadata.get(key).and_then(Value::as_array))
-        })
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(Value::as_str)
-                .filter_map(parse_reasoning_effort)
-                .fold(Vec::new(), |mut efforts, effort| {
-                    if !efforts.contains(&effort) {
-                        efforts.push(effort);
-                    }
-                    efforts
-                })
-        })
-        .unwrap_or_else(|| {
-            capabilities
-                .reasoning_efforts
-                .iter()
-                .filter_map(|value| parse_reasoning_effort(value))
-                .collect()
-        });
+    let metadata_supported_efforts = metadata_reasoning_efforts(metadata);
+    let preset = capabilities
+        .supports_reasoning
+        .then(|| reasoning_preset(model_id))
+        .flatten();
+    let supported_efforts = metadata_supported_efforts.clone().unwrap_or_else(|| {
+        preset.map_or_else(
+            || {
+                capabilities
+                    .reasoning_efforts
+                    .iter()
+                    .filter_map(|value| parse_reasoning_effort(value))
+                    .collect()
+            },
+            |value| value.supported_efforts.to_vec(),
+        )
+    });
 
     ModelConfiguration {
         endpoint_override: None,
@@ -301,7 +358,13 @@ pub fn configuration_from_metadata(
             default_effort: reasoning_metadata
                 .and_then(|value| value.get("defaultEffort"))
                 .and_then(Value::as_str)
-                .and_then(parse_reasoning_effort),
+                .and_then(parse_reasoning_effort)
+                .or_else(|| {
+                    metadata_supported_efforts
+                        .is_none()
+                        .then(|| preset.map(|value| value.default_effort))
+                        .flatten()
+                }),
             supported_efforts,
             summary: reasoning_metadata
                 .and_then(|value| value.get("summary"))
@@ -310,11 +373,50 @@ pub fn configuration_from_metadata(
             can_disable_thinking: reasoning_metadata
                 .and_then(|value| value.get("canDisableThinking"))
                 .and_then(Value::as_bool)
+                .or_else(|| preset.map(|value| value.can_disable_thinking))
                 .unwrap_or(true),
         },
         use_custom_protocol: optional_bool(metadata, &["useCustomProtocol", "use_custom_protocol"])
             .unwrap_or(false),
     }
+}
+
+fn reasoning_preset(model_id: &str) -> Option<ReasoningPreset> {
+    let id = model_id.to_ascii_lowercase();
+    let id = catalog_model_id(&id);
+    let deepseek = ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-reasoner"]
+        .into_iter()
+        .any(|family| matches_model_family(id, family));
+
+    if deepseek {
+        Some(ReasoningPreset {
+            default_effort: ReasoningEffort::High,
+            supported_efforts: DEEPSEEK_REASONING_EFFORTS,
+            can_disable_thinking: true,
+        })
+    } else if id == "kimi-k3" {
+        Some(ReasoningPreset {
+            default_effort: ReasoningEffort::High,
+            supported_efforts: KIMI_K3_REASONING_EFFORTS,
+            can_disable_thinking: true,
+        })
+    } else {
+        None
+    }
+}
+
+fn catalog_model_id(model_id: &str) -> &str {
+    model_id.rsplit('/').next().unwrap_or(model_id)
+}
+
+fn matches_model_family(model_id: &str, family: &str) -> bool {
+    model_id == family
+        || model_id
+            .strip_prefix(family)
+            .and_then(|suffix| suffix.strip_prefix('-'))
+            .is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.chars().all(|character| character.is_ascii_digit())
+            })
 }
 
 fn optional_u64(metadata: &Value, keys: &[&str]) -> Option<u64> {
@@ -341,6 +443,17 @@ fn parse_reasoning_effort(value: &str) -> Option<ReasoningEffort> {
         "xhigh" => Some(ReasoningEffort::Xhigh),
         "max" => Some(ReasoningEffort::Max),
         _ => None,
+    }
+}
+
+fn reasoning_effort_name(value: ReasoningEffort) -> &'static str {
+    match value {
+        ReasoningEffort::Minimal => "minimal",
+        ReasoningEffort::Low => "low",
+        ReasoningEffort::Medium => "medium",
+        ReasoningEffort::High => "high",
+        ReasoningEffort::Xhigh => "xhigh",
+        ReasoningEffort::Max => "max",
     }
 }
 
@@ -434,7 +547,7 @@ mod tests {
             ..Default::default()
         };
 
-        let configuration = configuration_from_metadata(&metadata, &capabilities);
+        let configuration = configuration_from_metadata("custom-model", &metadata, &capabilities);
 
         assert_eq!(configuration.max_input_tokens, Some(262_144));
         assert_eq!(configuration.max_output_tokens, Some(32_768));
@@ -450,5 +563,95 @@ mod tests {
             Some(ReasoningSummary::Detailed)
         );
         assert!(!configuration.reasoning.can_disable_thinking);
+    }
+
+    #[test]
+    fn applies_deepseek_reasoning_preset_to_namespaced_and_versioned_models() {
+        let model_id = "deepseek/deepseek-v4-pro-202606";
+        let (capabilities, _) = CapabilityResolver::resolve(model_id, &Value::Null, &[]);
+        let configuration = configuration_from_metadata(model_id, &Value::Null, &capabilities);
+
+        assert!(capabilities.supports_reasoning);
+        assert_eq!(capabilities.reasoning_efforts, vec!["high", "max"]);
+        assert_eq!(
+            configuration.reasoning.default_effort,
+            Some(ReasoningEffort::High)
+        );
+        assert_eq!(
+            configuration.reasoning.supported_efforts,
+            vec![ReasoningEffort::High, ReasoningEffort::Max]
+        );
+        assert!(configuration.reasoning.can_disable_thinking);
+    }
+
+    #[test]
+    fn applies_kimi_k3_reasoning_preset() {
+        let model_id = "moonshotai/kimi-k3";
+        let (capabilities, _) = CapabilityResolver::resolve(model_id, &Value::Null, &[]);
+        let configuration = configuration_from_metadata(model_id, &Value::Null, &capabilities);
+
+        assert!(capabilities.supports_reasoning);
+        assert_eq!(
+            configuration.reasoning.supported_efforts,
+            vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+                ReasoningEffort::Max
+            ]
+        );
+        assert_eq!(
+            configuration.reasoning.default_effort,
+            Some(ReasoningEffort::High)
+        );
+    }
+
+    #[test]
+    fn does_not_apply_kimi_k3_preset_to_other_versions() {
+        let (capabilities, _) =
+            CapabilityResolver::resolve("moonshotai/kimi-k3-1", &Value::Null, &[]);
+
+        assert!(!capabilities.supports_reasoning);
+        assert!(capabilities.reasoning_efforts.is_empty());
+    }
+
+    #[test]
+    fn metadata_overrides_catalog_reasoning_preset() {
+        let model_id = "deepseek-v4-pro";
+        let metadata = serde_json::json!({
+            "supportsReasoning": true,
+            "reasoning": {
+                "defaultEffort": "low",
+                "supportedEfforts": ["minimal", "low"],
+                "canDisableThinking": false
+            }
+        });
+        let (capabilities, _) = CapabilityResolver::resolve(model_id, &metadata, &[]);
+        let configuration = configuration_from_metadata(model_id, &metadata, &capabilities);
+
+        assert_eq!(capabilities.reasoning_efforts, vec!["minimal", "low"]);
+        assert_eq!(
+            configuration.reasoning.supported_efforts,
+            vec![ReasoningEffort::Minimal, ReasoningEffort::Low]
+        );
+        assert_eq!(
+            configuration.reasoning.default_effort,
+            Some(ReasoningEffort::Low)
+        );
+        assert!(!configuration.reasoning.can_disable_thinking);
+    }
+
+    #[test]
+    fn explicit_empty_metadata_efforts_do_not_fall_back_to_catalog() {
+        let model_id = "deepseek-v4-flash";
+        let metadata = serde_json::json!({
+            "reasoning": {"supportedEfforts": []}
+        });
+        let (capabilities, _) = CapabilityResolver::resolve(model_id, &metadata, &[]);
+        let configuration = configuration_from_metadata(model_id, &metadata, &capabilities);
+
+        assert!(capabilities.supports_reasoning);
+        assert!(capabilities.reasoning_efforts.is_empty());
+        assert!(configuration.reasoning.supported_efforts.is_empty());
+        assert_eq!(configuration.reasoning.default_effort, None);
     }
 }

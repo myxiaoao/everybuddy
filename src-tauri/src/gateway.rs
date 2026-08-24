@@ -101,9 +101,8 @@ impl GatewayClient {
                     .unwrap_or_default();
                 let (capabilities, evidence) =
                     CapabilityResolver::resolve(id, item, &preserved_evidence);
-                let configuration = existing_model
-                    .map(|model| model.configuration.clone())
-                    .unwrap_or_else(|| configuration_from_metadata(item, &capabilities));
+                let configuration =
+                    discovered_configuration(existing_model, id, item, &capabilities);
                 let mut metadata = object_without_secret(item);
                 if let Some(source) = existing_model
                     .and_then(|model| model.metadata.get("everybuddySource"))
@@ -264,6 +263,33 @@ impl GatewayClient {
         serde_json::from_slice(&bytes)
             .map_err(|_| CoreError::Protocol("Response is not valid JSON".to_string()))
     }
+}
+
+fn should_preserve_configuration(model: &ManagedModel) -> bool {
+    let local_source = matches!(
+        model
+            .metadata
+            .get("everybuddySource")
+            .and_then(Value::as_str),
+        Some("manual" | "targetImport")
+    );
+    local_source
+        || model
+            .evidence
+            .iter()
+            .any(|item| item.source == EvidenceSource::Manual)
+}
+
+fn discovered_configuration(
+    existing: Option<&ManagedModel>,
+    model_id: &str,
+    metadata: &Value,
+    capabilities: &crate::models::CapabilitySet,
+) -> crate::models::ModelConfiguration {
+    existing
+        .filter(|model| should_preserve_configuration(model))
+        .map(|model| model.configuration.clone())
+        .unwrap_or_else(|| configuration_from_metadata(model_id, metadata, capabilities))
 }
 
 async fn read_response_body(mut response: reqwest::Response, label: &str) -> CoreResult<Vec<u8>> {
@@ -644,6 +670,70 @@ mod tests {
         assert_eq!(models[0].id, "gpt-5.6");
         assert!(models[0].capabilities.supports_tool_call);
         server_thread.join().unwrap();
+    }
+
+    #[test]
+    fn refresh_reapplies_automatic_configuration_but_preserves_manual_configuration() {
+        let mut automatic = ManagedModel {
+            key: "gateway::deepseek-v4-pro".to_string(),
+            gateway_id: "gateway".to_string(),
+            id: "deepseek-v4-pro".to_string(),
+            name: "DeepSeek V4 Pro".to_string(),
+            vendor: "deepseek".to_string(),
+            capabilities: crate::models::CapabilitySet {
+                supports_reasoning: true,
+                reasoning_efforts: vec!["high".to_string(), "max".to_string()],
+                ..Default::default()
+            },
+            configuration: crate::models::ModelConfiguration {
+                reasoning: crate::models::ReasoningConfiguration {
+                    default_effort: Some(crate::models::ReasoningEffort::High),
+                    supported_efforts: vec![
+                        crate::models::ReasoningEffort::High,
+                        crate::models::ReasoningEffort::Max,
+                    ],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            evidence: Vec::new(),
+            metadata: json!({"id": "deepseek-v4-pro"}),
+            updated_at: "2026-08-20T00:00:00Z".to_string(),
+        };
+
+        let metadata = json!({
+            "supportsReasoning": true,
+            "reasoning": {
+                "defaultEffort": "low",
+                "supportedEfforts": ["low"]
+            }
+        });
+        let (capabilities, _) =
+            CapabilityResolver::resolve(&automatic.id, &metadata, &automatic.evidence);
+        let refreshed =
+            discovered_configuration(Some(&automatic), &automatic.id, &metadata, &capabilities);
+
+        assert_eq!(
+            refreshed.reasoning.supported_efforts,
+            vec![crate::models::ReasoningEffort::Low]
+        );
+
+        automatic.evidence.push(evidence(
+            "configuration",
+            true,
+            EvidenceSource::Manual,
+            "User override",
+            "2026-08-20T00:00:00Z",
+        ));
+        let preserved =
+            discovered_configuration(Some(&automatic), &automatic.id, &metadata, &capabilities);
+        assert_eq!(preserved, automatic.configuration);
+
+        automatic.evidence.clear();
+        automatic.metadata["everybuddySource"] = json!("targetImport");
+        let imported =
+            discovered_configuration(Some(&automatic), &automatic.id, &metadata, &capabilities);
+        assert_eq!(imported, automatic.configuration);
     }
 
     #[test]

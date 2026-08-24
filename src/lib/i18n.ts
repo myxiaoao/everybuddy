@@ -102,6 +102,9 @@ const messages = {
     canDisableThinking: "允许关闭思考",
     canDisableThinkingHint: "允许在模型选择器中关闭思考模式。",
     supportedEfforts: "支持的思考强度",
+    reasoningEffortsResolved: "已根据模型信息自动匹配，可按 API 文档调整。",
+    reasoningEffortsUnknown: "未发现可靠范围，请按 API 文档确认。",
+    reasoningEffortsOverridden: "当前选择已覆盖自动匹配结果。",
     defaultEffort: "默认思考强度",
     legacyEffort: "兼容思考强度",
     automatic: "自动（使用请求层默认值）",
@@ -384,6 +387,12 @@ const messages = {
     canDisableThinkingHint:
       "When disabled, the model selector always uses reasoning mode.",
     supportedEfforts: "Supported reasoning efforts",
+    reasoningEffortsResolved:
+      "Matched from model information. Adjust it to your API documentation if needed.",
+    reasoningEffortsUnknown:
+      "No reliable range was found. Confirm it against your API documentation.",
+    reasoningEffortsOverridden:
+      "The current selection overrides the automatically matched range.",
     defaultEffort: "Default effort",
     legacyEffort: "Legacy effort",
     automatic: "Automatic",

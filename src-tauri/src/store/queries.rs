@@ -71,15 +71,16 @@ pub(super) fn query_models(
         let capabilities = parse_json(&row.get::<_, String>(5)?)?;
         let raw_configuration = row.get::<_, String>(6)?;
         let metadata = parse_json(&row.get::<_, String>(8)?)?;
+        let model_id: String = row.get(2)?;
         let configuration = if raw_configuration.trim() == "{}" {
-            crate::capability::configuration_from_metadata(&metadata, &capabilities)
+            crate::capability::configuration_from_metadata(&model_id, &metadata, &capabilities)
         } else {
             parse_json(&raw_configuration)?
         };
         models.push(ManagedModel {
             key: row.get(0)?,
             gateway_id: row.get(1)?,
-            id: row.get(2)?,
+            id: model_id,
             name: row.get(3)?,
             vendor: row.get(4)?,
             capabilities,

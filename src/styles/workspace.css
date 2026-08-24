@@ -714,6 +714,15 @@ input[type="checkbox"] {
   border: 0;
 }
 
+.effort-fieldset__hint {
+  margin: 4px 0 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-caption);
+  font-weight: 400;
+  line-height: var(--leading-body);
+  text-wrap: pretty;
+}
+
 .effort-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

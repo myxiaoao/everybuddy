@@ -6,15 +6,15 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::{
-    capability::{infer_vendor, CapabilityResolver},
+    capability::{configuration_from_metadata, evidence, infer_vendor, CapabilityResolver},
     error::CommandError,
     gateway::normalize_api_root,
     gateway_service::GatewayService,
     models::{
-        AppSettings, BackupRecord, BootstrapData, ExecutePublishRequest, GatewayInput,
-        GatewayProfile, ManagedModel, ManualModelInput, ModelConfiguration, ModelUpdateInput,
-        PreparePublishRequest, ProbeSummary, PublishPreview, PublishResult, SaveSettingsInput,
-        TargetKind, TargetModelState, TargetStatus,
+        AppSettings, BackupRecord, BootstrapData, EvidenceSource, ExecutePublishRequest,
+        GatewayInput, GatewayProfile, ManagedModel, ManualModelInput, ModelConfiguration,
+        ModelUpdateInput, PreparePublishRequest, ProbeSummary, PublishPreview, PublishResult,
+        SaveSettingsInput, TargetKind, TargetModelState, TargetStatus,
     },
     publish::PublishCoordinator,
     target::{default_target_paths, target_statuses},
@@ -224,6 +224,10 @@ pub fn update_model(
     }
     let configuration = normalize_model_configuration(input.configuration, &input.capabilities)
         .map_err(CommandError::from)?;
+    let reasoning_configuration_changed = model.configuration.only_reasoning
+        != configuration.only_reasoning
+        || model.configuration.reasoning != configuration.reasoning;
+    let configuration_changed = model.configuration != configuration;
     if model.capabilities != input.capabilities {
         CapabilityResolver::apply_manual(&mut model, input.capabilities);
     } else {
@@ -231,6 +235,23 @@ pub fn update_model(
     }
     model.name = name.to_string();
     model.vendor = vendor.to_ascii_lowercase();
+    if configuration_changed {
+        let capability = if reasoning_configuration_changed {
+            "reasoningConfiguration"
+        } else {
+            "configuration"
+        };
+        model
+            .evidence
+            .retain(|item| item.source != EvidenceSource::Manual || item.capability != capability);
+        model.evidence.push(evidence(
+            capability,
+            true,
+            EvidenceSource::Manual,
+            "User override",
+            &Utc::now().to_rfc3339(),
+        ));
+    }
     model.configuration = configuration;
     state.store.save_model(&model).map_err(CommandError::from)?;
     Ok(model)
@@ -415,6 +436,7 @@ fn build_manual_model(gateway_id: &str, id: &str, name: &str, vendor: &str) -> M
         "everybuddySource": "manual"
     });
     let (capabilities, evidence) = CapabilityResolver::resolve(id, &metadata, &[]);
+    let configuration = configuration_from_metadata(id, &metadata, &capabilities);
 
     ManagedModel {
         key: format!("{gateway_id}::{id}"),
@@ -427,7 +449,7 @@ fn build_manual_model(gateway_id: &str, id: &str, name: &str, vendor: &str) -> M
         },
         vendor,
         capabilities,
-        configuration: Default::default(),
+        configuration,
         evidence,
         metadata,
         updated_at: Utc::now().to_rfc3339(),
@@ -465,6 +487,24 @@ mod tests {
         assert_eq!(model.vendor, "openai");
         assert!(model.capabilities.supports_tool_call);
         assert_eq!(model.metadata["everybuddySource"], "manual");
+    }
+
+    #[test]
+    fn manual_model_uses_catalog_reasoning_configuration() {
+        let model = build_manual_model("gateway-1", "deepseek/deepseek-v4-flash-202606", "", "");
+
+        assert!(model.capabilities.supports_reasoning);
+        assert_eq!(
+            model.configuration.reasoning.supported_efforts,
+            vec![
+                crate::models::ReasoningEffort::High,
+                crate::models::ReasoningEffort::Max
+            ]
+        );
+        assert_eq!(
+            model.configuration.reasoning.default_effort,
+            Some(crate::models::ReasoningEffort::High)
+        );
     }
 
     #[test]

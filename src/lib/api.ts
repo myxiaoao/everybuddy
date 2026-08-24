@@ -14,6 +14,7 @@ import type {
   ProbeSummary,
   PublishPreview,
   PublishResult,
+  ReasoningEffort,
   TargetKind,
   TargetImportReport,
   TargetModelState,
@@ -138,6 +139,8 @@ let demoModels: ManagedModel[] = [
     true,
     true,
     "imported",
+    ["low", "medium", "high"],
+    "high",
   ),
   createDemoModel(
     demoGateway.id,
@@ -158,6 +161,8 @@ let demoModels: ManagedModel[] = [
     false,
     true,
     "catalog",
+    [],
+    null,
   ),
   createDemoModel(
     demoGateway.id,
@@ -178,6 +183,8 @@ let demoModels: ManagedModel[] = [
     false,
     true,
     "metadata",
+    [],
+    null,
   ),
   createDemoModel(
     demoRelay.id,
@@ -346,15 +353,7 @@ async function demoCall(
     case "update_model": {
       const input = (args as { input: ModelUpdateInput }).input;
       demoModels = demoModels.map((model) =>
-        model.key === input.modelKey
-          ? {
-              ...model,
-              name: input.name,
-              vendor: input.vendor,
-              capabilities: input.capabilities,
-              configuration: input.configuration,
-            }
-          : model,
+        model.key === input.modelKey ? updateDemoModel(model, input) : model,
       );
       return demoModels.find((model) => model.key === input.modelKey);
     }
@@ -435,12 +434,14 @@ function createDemoModel(
   supportsImages: boolean,
   supportsReasoning: boolean,
   source: "metadata" | "catalog" | "imported" | "probe",
+  supportedEfforts: ReasoningEffort[] = [],
+  defaultEffort: ReasoningEffort | null = null,
 ): ManagedModel {
   const capabilities = {
     supportsToolCall,
     supportsImages,
     supportsReasoning,
-    reasoningEfforts: supportsReasoning ? ["low", "medium", "high"] : [],
+    reasoningEfforts: supportsReasoning ? supportedEfforts : [],
   };
   const configuration: ModelConfiguration = {
     endpointOverride: null,
@@ -450,8 +451,8 @@ function createDemoModel(
     onlyReasoning: false,
     reasoning: {
       effort: null,
-      defaultEffort: supportsReasoning ? "high" : null,
-      supportedEfforts: supportsReasoning ? ["low", "medium", "high"] : [],
+      defaultEffort: supportsReasoning ? defaultEffort : null,
+      supportedEfforts: supportsReasoning ? supportedEfforts : [],
       summary: null,
       canDisableThinking: true,
     },
@@ -497,13 +498,49 @@ function createDemoModel(
   };
 }
 
+function updateDemoModel(
+  model: ManagedModel,
+  input: ModelUpdateInput,
+): ManagedModel {
+  const reasoningChanged =
+    model.configuration.onlyReasoning !== input.configuration.onlyReasoning ||
+    JSON.stringify(model.configuration.reasoning) !==
+      JSON.stringify(input.configuration.reasoning);
+  const evidence = reasoningChanged
+    ? [
+        ...model.evidence.filter(
+          (item) => item.capability !== "reasoningConfiguration",
+        ),
+        {
+          capability: "reasoningConfiguration" as const,
+          value: true,
+          source: "manual" as const,
+          detail: "User override",
+          checkedAt: now,
+        },
+      ]
+    : model.evidence;
+
+  return {
+    ...model,
+    name: input.name,
+    vendor: input.vendor,
+    capabilities: input.capabilities,
+    configuration: input.configuration,
+    evidence,
+  };
+}
+
 function createDemoManualModel(input: ManualModelInput): ManagedModel {
   const id = input.id.trim();
   const vendor = input.vendor.trim().toLocaleLowerCase() || inferDemoVendor(id);
   const lowerId = id.toLocaleLowerCase();
+  const reasoningPreset = demoReasoningPreset(lowerId);
   const supportsToolCall = /gpt|claude|qwen/.test(lowerId);
   const supportsImages = /gpt|claude|gemini/.test(lowerId);
-  const supportsReasoning = /gpt-5|reason|thinking|deepseek-r1/.test(lowerId);
+  const supportsReasoning =
+    reasoningPreset !== null ||
+    /gpt-5|reason|thinking|deepseek-r1/.test(lowerId);
   const model = createDemoModel(
     input.gatewayId,
     id,
@@ -513,11 +550,35 @@ function createDemoManualModel(input: ManualModelInput): ManagedModel {
     supportsImages,
     supportsReasoning,
     "catalog",
+    reasoningPreset?.supportedEfforts,
+    reasoningPreset?.defaultEffort,
   );
   return {
     ...model,
     metadata: { id, owned_by: vendor, everybuddySource: "manual" },
   };
+}
+
+function demoReasoningPreset(modelId: string): {
+  supportedEfforts: ReasoningEffort[];
+  defaultEffort: ReasoningEffort;
+} | null {
+  const segments = modelId.split("/");
+  const id = segments[segments.length - 1] ?? modelId;
+  if (
+    ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-reasoner"].some(
+      (family) => id === family || id.startsWith(`${family}-`),
+    )
+  ) {
+    return { supportedEfforts: ["high", "max"], defaultEffort: "high" };
+  }
+  if (id === "kimi-k3") {
+    return {
+      supportedEfforts: ["low", "high", "max"],
+      defaultEffort: "high",
+    };
+  }
+  return null;
 }
 
 function inferDemoVendor(id: string) {

@@ -69,7 +69,12 @@ export interface ModelUpdateInput {
 }
 
 export interface CapabilityEvidence {
-  capability: "toolCall" | "images" | "reasoning";
+  capability:
+    | "toolCall"
+    | "images"
+    | "reasoning"
+    | "configuration"
+    | "reasoningConfiguration";
   value: boolean;
   source: EvidenceSource;
   detail: string;
