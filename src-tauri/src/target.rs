@@ -81,19 +81,20 @@ pub fn target_statuses(
         .map(|adapter| {
             let kind = adapter.kind();
             let path = target_path(kind, paths)?;
-            Ok(target_status(store, kind, &path))
+            target_status(store, kind, &path)
         })
         .collect()
 }
 
-fn target_status(store: &Store, kind: TargetKind, path: &Path) -> TargetStatus {
+fn target_status(store: &Store, kind: TargetKind, path: &Path) -> CoreResult<TargetStatus> {
     let parent_exists = path.parent().is_some_and(Path::exists);
     let file_exists = path.exists();
-    let installed = file_exists || parent_exists;
-    let writable = is_writable(path);
+    let installed = fs::symlink_metadata(path).is_ok() || parent_exists;
+    let write_path = target_write_path(path);
+    let writable = write_path.as_deref().is_ok_and(is_writable);
     let mut schema = TargetSchema::Missing;
     let mut fingerprint_value = None;
-    let mut error = None;
+    let mut error = write_path.err().map(|error| error.to_string());
 
     if file_exists {
         match read_target_file(path) {
@@ -115,12 +116,10 @@ fn target_status(store: &Store, kind: TargetKind, path: &Path) -> TargetStatus {
     }
 
     let drifted = store
-        .target_last_published_hash(kind)
-        .ok()
-        .flatten()
+        .target_last_published_hash(kind)?
         .is_some_and(|published| fingerprint_value.as_deref() != Some(published.as_str()));
 
-    TargetStatus {
+    Ok(TargetStatus {
         kind,
         display_name: kind.display_name().to_string(),
         path: path.to_string_lossy().to_string(),
@@ -131,7 +130,7 @@ fn target_status(store: &Store, kind: TargetKind, path: &Path) -> TargetStatus {
         fingerprint: fingerprint_value,
         drifted,
         error,
-    }
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -374,7 +373,7 @@ pub fn fingerprint(bytes: &[u8]) -> String {
 }
 
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> CoreResult<()> {
-    let write_path = resolve_write_path(path)?;
+    let write_path = target_write_path(path)?;
     let parent = write_path
         .parent()
         .ok_or_else(|| CoreError::Target("Target path has no parent directory".to_string()))?;
@@ -394,21 +393,53 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> CoreResult<()> {
     Ok(())
 }
 
-fn resolve_write_path(path: &Path) -> CoreResult<PathBuf> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => fs::canonicalize(path).map_err(|_| {
-            CoreError::Target(format!(
-                "Target path is a dangling symlink: {}",
-                path.display()
-            ))
+pub fn target_write_path(path: &Path) -> CoreResult<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().map_err(CoreError::from)?.join(path)
+    };
+    match fs::symlink_metadata(&absolute) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            fs::canonicalize(&absolute).map_err(|_| {
+                CoreError::Target(format!(
+                    "Target path is a dangling symlink: {}",
+                    path.display()
+                ))
+            })
+        }
+        Ok(_) => fs::canonicalize(&absolute).map_err(|error| {
+            CoreError::Target(format!("Could not resolve {}: {error}", path.display(),))
         }),
-        Ok(_) => Ok(path.to_path_buf()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(path.to_path_buf()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            resolve_missing_path(&absolute)
+        }
         Err(error) => Err(CoreError::Target(format!(
             "Could not inspect {}: {error}",
             path.display()
         ))),
     }
+}
+
+fn resolve_missing_path(path: &Path) -> CoreResult<PathBuf> {
+    let mut cursor = path;
+    let mut missing = Vec::new();
+    while !cursor.exists() {
+        let file_name = cursor.file_name().ok_or_else(|| {
+            CoreError::Target(format!("Could not resolve target path: {}", path.display()))
+        })?;
+        missing.push(file_name.to_os_string());
+        cursor = cursor.parent().ok_or_else(|| {
+            CoreError::Target(format!("Could not resolve target path: {}", path.display()))
+        })?;
+    }
+    let mut resolved = fs::canonicalize(cursor).map_err(|error| {
+        CoreError::Target(format!("Could not resolve {}: {error}", path.display()))
+    })?;
+    for component in missing.iter().rev() {
+        resolved.push(component);
+    }
+    Ok(resolved)
 }
 
 pub fn secure_permissions(path: &Path) -> CoreResult<()> {
@@ -551,7 +582,25 @@ fn merge_known_fields(existing: &Value, incoming: &Value) -> Value {
         }
         merged.insert("reasoning".to_string(), Value::Object(reasoning));
     } else {
-        merged.remove("reasoning");
+        let mut reasoning = merged
+            .get("reasoning")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        for field in [
+            "effort",
+            "defaultEffort",
+            "supportedEfforts",
+            "summary",
+            "canDisableThinking",
+        ] {
+            reasoning.remove(field);
+        }
+        if reasoning.is_empty() {
+            merged.remove("reasoning");
+        } else {
+            merged.insert("reasoning".to_string(), Value::Object(reasoning));
+        }
     }
     Value::Object(merged)
 }
@@ -644,6 +693,26 @@ mod tests {
             .unwrap()
             .file_type()
             .is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn target_status_reports_a_dangling_symlink_as_unwritable() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(&directory.path().join("everybuddy.db")).unwrap();
+        let link = directory.path().join("models.json");
+        symlink(directory.path().join("missing.json"), &link).unwrap();
+
+        let status = target_status(&store, TargetKind::Workbuddy, &link).unwrap();
+
+        assert!(status.installed);
+        assert!(!status.file_exists);
+        assert!(!status.writable);
+        assert!(status
+            .error
+            .is_some_and(|error| error.contains("dangling symlink")));
     }
 
     #[test]
@@ -783,6 +852,33 @@ mod tests {
     }
 
     #[test]
+    fn target_status_fails_closed_when_drift_state_cannot_be_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(&directory.path().join("everybuddy.db")).unwrap();
+        store.execute_test_sql("DROP TABLE target_states").unwrap();
+        let paths = HashMap::from([
+            (
+                TargetKind::Workbuddy,
+                directory
+                    .path()
+                    .join("work.json")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+            (
+                TargetKind::Codebuddy,
+                directory
+                    .path()
+                    .join("code.json")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+        ]);
+
+        assert!(target_statuses(&store, &paths).is_err());
+    }
+
+    #[test]
     fn clears_managed_optional_fields_and_preserves_unknown_fields() {
         let existing = json!({
             "id": "plain-model",
@@ -805,7 +901,8 @@ mod tests {
         assert!(merged.get("maxInputTokens").is_none());
         assert!(merged.get("maxOutputTokens").is_none());
         assert!(merged.get("temperature").is_none());
-        assert!(merged.get("reasoning").is_none());
+        assert!(merged["reasoning"].get("effort").is_none());
+        assert_eq!(merged["reasoning"]["providerOption"], true);
         assert_eq!(merged["providerOption"], "keep");
     }
 

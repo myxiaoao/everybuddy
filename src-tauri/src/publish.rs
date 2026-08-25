@@ -10,14 +10,16 @@ use uuid::Uuid;
 
 use crate::{
     error::{CoreError, CoreResult},
+    gateway_service::{gateway_source_hash, source_identity_key},
     models::{
-        BackupRecord, ExecutePublishRequest, ModelConflict, PreparePublishRequest, PublishPreview,
-        PublishResult, TargetKind, TargetPreview, TargetPublishResult,
+        BackupRecord, ExecutePublishRequest, ModelConflict, ModelRevision, PreparePublishRequest,
+        PublishPreview, PublishResult, TargetKind, TargetPreview, TargetPublishResult,
     },
     secrets::SecretStore,
     store::{Store, TargetStateUpdate},
     target::{
-        atomic_write, fingerprint, model_config, read_target_file, target_path, ConfigDocument,
+        atomic_write, fingerprint, model_config, read_target_file, target_path, target_write_path,
+        ConfigDocument,
     },
 };
 
@@ -40,7 +42,13 @@ impl PublishCoordinator<'_> {
         let models = self
             .store
             .selected_models(&request.gateway_id, &request.model_ids)?;
+        validate_model_configurations(&models)?;
         let token = self.secrets.get(&gateway.token_ref)?;
+        let identity_key = source_identity_key(
+            self.secrets.as_ref(),
+            self.store.has_gateway_source_history()?,
+        )?;
+        let credential_revision = gateway_source_hash(&identity_key, &gateway.api_root, &token);
         let incoming: Vec<_> = models
             .iter()
             .map(|model| model_config(model, &gateway, &token))
@@ -51,7 +59,8 @@ impl PublishCoordinator<'_> {
 
         for kind in &request.targets {
             let path = target_path(*kind, target_paths)?;
-            let (mut document, original) = ConfigDocument::read(&path)?;
+            let write_path = target_write_path(&path)?;
+            let (mut document, original) = ConfigDocument::read(&write_path)?;
             conflicts.extend(document.collisions(&selected_ids).into_iter().map(
                 |(model_id, existing_name)| ModelConflict {
                     target: *kind,
@@ -63,6 +72,7 @@ impl PublishCoordinator<'_> {
             targets.push(TargetPreview {
                 target: *kind,
                 path: path.to_string_lossy().to_string(),
+                write_path: write_path.to_string_lossy().to_string(),
                 fingerprint: original.as_deref().map(fingerprint),
                 add_count: summary.add_count,
                 update_count: summary.update_count,
@@ -77,6 +87,9 @@ impl PublishCoordinator<'_> {
                 "WorkBuddy and CodeBuddy require the API token in their local models.json file."
                     .to_string(),
             ],
+            gateway_revision: gateway.updated_at,
+            credential_revision,
+            model_revisions: model_revisions(&models),
         })
     }
 
@@ -90,7 +103,28 @@ impl PublishCoordinator<'_> {
         let models = self
             .store
             .selected_models(&request.gateway_id, &request.model_ids)?;
+        validate_model_configurations(&models)?;
         let token = self.secrets.get(&gateway.token_ref)?;
+        let identity_key = source_identity_key(
+            self.secrets.as_ref(),
+            self.store.has_gateway_source_history()?,
+        )?;
+        let credential_revision = gateway_source_hash(&identity_key, &gateway.api_root, &token);
+        validate_resource_revisions(request, &gateway.updated_at, &credential_revision, &models)?;
+        let mut source_hashes: Vec<_> = models
+            .iter()
+            .map(|model| {
+                let api_root = model
+                    .configuration
+                    .endpoint_override
+                    .as_deref()
+                    .unwrap_or(&gateway.api_root);
+                gateway_source_hash(&identity_key, api_root, &token)
+            })
+            .collect();
+        source_hashes.push(credential_revision.clone());
+        source_hashes.sort_unstable();
+        source_hashes.dedup();
         let incoming: Vec<_> = models
             .iter()
             .map(|model| model_config(model, &gateway, &token))
@@ -99,16 +133,42 @@ impl PublishCoordinator<'_> {
         let expectation_map: HashMap<_, _> = request
             .expectations
             .iter()
-            .map(|item| (item.target, item.fingerprint.as_deref()))
+            .map(|item| (item.target, item))
             .collect();
+        if request.expectations.len() != request.targets.len()
+            || expectation_map.len() != request.targets.len()
+            || request
+                .targets
+                .iter()
+                .any(|target| !expectation_map.contains_key(target))
+        {
+            return Err(CoreError::Conflict(
+                "The publish preview is incomplete; create a new preview".to_string(),
+            ));
+        }
         let mut prepared = Vec::new();
 
         for kind in &request.targets {
             let path = target_path(*kind, target_paths)?;
-            let (mut document, original) = ConfigDocument::read(&path)?;
+            let expectation = expectation_map
+                .get(kind)
+                .expect("expectations were validated above");
+            if path != Path::new(&expectation.path) {
+                return Err(CoreError::Conflict(format!(
+                    "{} path changed after preview; create a new preview",
+                    kind.display_name()
+                )));
+            }
+            let write_path = target_write_path(&path)?;
+            if write_path != Path::new(&expectation.write_path) {
+                return Err(CoreError::Conflict(format!(
+                    "{} write destination changed after preview; create a new preview",
+                    kind.display_name()
+                )));
+            }
+            let (mut document, original) = ConfigDocument::read(&write_path)?;
             let current_fingerprint = original.as_deref().map(fingerprint);
-            let expected = expectation_map.get(kind).copied().flatten();
-            if current_fingerprint.as_deref() != expected {
+            if current_fingerprint.as_deref() != expectation.fingerprint.as_deref() {
                 return Err(CoreError::Drift(format!(
                     "{} configuration changed after preview; reload before publishing",
                     kind.display_name()
@@ -123,15 +183,25 @@ impl PublishCoordinator<'_> {
             document.merge(&incoming);
             prepared.push(PreparedTarget {
                 kind: *kind,
-                path,
+                configured_path: path,
+                write_path,
                 original,
                 output: document.to_bytes()?,
             });
         }
 
+        let current_token = self.secrets.get(&gateway.token_ref)?;
+        let current_credential_revision =
+            gateway_source_hash(&identity_key, &gateway.api_root, &current_token);
+        if current_credential_revision != request.credential_revision {
+            return Err(CoreError::Conflict(
+                "The API credential changed after preview; create a new preview".to_string(),
+            ));
+        }
+
         for target in &prepared {
             if let Some(original) = &target.original {
-                self.create_backup(target.kind, &target.path, original)?;
+                self.create_backup(target.kind, &target.write_path, original)?;
             }
         }
 
@@ -176,14 +246,18 @@ impl PublishCoordinator<'_> {
                 let hash = fingerprint(&target.output);
                 TargetStateUpdate {
                     target: target.kind,
-                    path: target.path.to_string_lossy().to_string(),
+                    path: target.configured_path.to_string_lossy().to_string(),
                     seen_hash: Some(hash.clone()),
                     published_hash: Some(hash),
                     schema: "managed".to_string(),
                 }
             })
             .collect();
-        if self.store.save_target_states(&state_updates).is_err() {
+        if self
+            .store
+            .save_publish_state(&gateway.id, &source_hashes, &state_updates)
+            .is_err()
+        {
             rollback_committed(
                 &committed,
                 &mut results,
@@ -230,7 +304,8 @@ impl PublishCoordinator<'_> {
         ) {
             let restored = PreparedTarget {
                 kind: backup.target,
-                path: source_path,
+                configured_path: source_path.clone(),
+                write_path: source_path,
                 original,
                 output: bytes,
             };
@@ -264,7 +339,14 @@ impl PublishCoordinator<'_> {
             fingerprint: fingerprint(bytes),
             created_at: Utc::now().to_rfc3339(),
         };
-        self.store.add_backup(&backup)?;
+        if let Err(error) = self.store.add_backup(&backup) {
+            return match fs::remove_file(&backup_path) {
+                Ok(()) => Err(error),
+                Err(_) => Err(CoreError::Storage(
+                    "Could not record the backup, and backup file cleanup also failed".to_string(),
+                )),
+            };
+        }
         self.prune_backups(target)?;
         Ok(backup)
     }
@@ -277,19 +359,58 @@ impl PublishCoordinator<'_> {
             .skip(BACKUP_RETENTION)
         {
             let path = PathBuf::from(&backup.path);
-            if path.exists() {
-                fs::remove_file(path)?;
-            }
             self.store.remove_backup_record(&backup.id)?;
+            if path.exists() {
+                if let Err(error) = fs::remove_file(&path) {
+                    return match self.store.add_backup(&backup) {
+                        Ok(()) => Err(CoreError::Storage(error.to_string())),
+                        Err(_) => Err(CoreError::Storage(
+                            "Could not remove an expired backup, and its database record could not be restored"
+                                .to_string(),
+                        )),
+                    };
+                }
+            }
         }
         Ok(())
     }
 }
 
+fn model_revisions(models: &[crate::models::ManagedModel]) -> Vec<ModelRevision> {
+    let mut revisions: Vec<_> = models
+        .iter()
+        .map(|model| ModelRevision {
+            key: model.key.clone(),
+            updated_at: model.updated_at.clone(),
+        })
+        .collect();
+    revisions.sort_by(|left, right| left.key.cmp(&right.key));
+    revisions
+}
+
+fn validate_resource_revisions(
+    request: &ExecutePublishRequest,
+    gateway_revision: &str,
+    credential_revision: &str,
+    models: &[crate::models::ManagedModel],
+) -> CoreResult<()> {
+    if request.gateway_revision != gateway_revision
+        || request.credential_revision != credential_revision
+        || request.model_revisions != model_revisions(models)
+    {
+        return Err(CoreError::Conflict(
+            "The API profile or selected models changed after preview; create a new preview"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct PreparedTarget {
     kind: TargetKind,
-    path: PathBuf,
+    configured_path: PathBuf,
+    write_path: PathBuf,
     original: Option<Vec<u8>>,
     output: Vec<u8>,
 }
@@ -311,18 +432,36 @@ fn validate_request(model_ids: &[String], targets: &[TargetKind]) -> CoreResult<
             "A configuration target can only be selected once".to_string(),
         ));
     }
+    let unique_models: HashSet<_> = model_ids.iter().collect();
+    if unique_models.len() != model_ids.len() {
+        return Err(CoreError::Validation(
+            "A model can only be selected once".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_model_configurations(models: &[crate::models::ManagedModel]) -> CoreResult<()> {
+    if models
+        .iter()
+        .any(|model| !model.configuration.has_valid_numeric_values())
+    {
+        return Err(CoreError::Validation(
+            "One or more selected models contain invalid numeric configuration".to_string(),
+        ));
+    }
     Ok(())
 }
 
 fn write_and_verify(target: &PreparedTarget, selected_ids: &HashSet<&str>) -> CoreResult<()> {
-    if current_target_bytes(&target.path)? != target.original {
+    if current_target_bytes(&target.write_path)? != target.original {
         return Err(CoreError::Drift(format!(
             "{} configuration changed immediately before publishing",
             target.kind.display_name()
         )));
     }
-    atomic_write(&target.path, &target.output)?;
-    let written = read_target_file(&target.path)?;
+    atomic_write(&target.write_path, &target.output)?;
+    let written = read_target_file(&target.write_path)?;
     let document = ConfigDocument::parse(&written)?;
     let written_ids: HashSet<_> = document
         .models()
@@ -339,7 +478,7 @@ fn write_and_verify(target: &PreparedTarget, selected_ids: &HashSet<&str>) -> Co
 }
 
 fn rollback_target(target: &PreparedTarget) -> CoreResult<()> {
-    let current = current_target_bytes(&target.path)?;
+    let current = current_target_bytes(&target.write_path)?;
     if current == target.original {
         return Ok(());
     }
@@ -350,12 +489,12 @@ fn rollback_target(target: &PreparedTarget) -> CoreResult<()> {
         )));
     }
     if let Some(original) = &target.original {
-        atomic_write(&target.path, original)
-    } else if target.path.exists() {
-        fs::remove_file(&target.path).map_err(|error| {
+        atomic_write(&target.write_path, original)
+    } else if target.write_path.exists() {
+        fs::remove_file(&target.write_path).map_err(|error| {
             CoreError::Target(format!(
                 "Could not remove {}: {error}",
-                target.path.display()
+                target.write_path.display()
             ))
         })
     } else {
@@ -512,17 +651,34 @@ mod tests {
                 .iter()
                 .map(|target| {
                     let path = self.path(*target);
+                    let write_path = target_write_path(&path).unwrap();
                     TargetExpectation {
                         target: *target,
-                        fingerprint: path.exists().then(|| fingerprint(&fs::read(path).unwrap())),
+                        path: path.to_string_lossy().to_string(),
+                        write_path: write_path.to_string_lossy().to_string(),
+                        fingerprint: write_path
+                            .exists()
+                            .then(|| fingerprint(&fs::read(write_path).unwrap())),
                     }
                 })
                 .collect();
+            let gateway = self.store.gateway("gateway").unwrap();
+            let token = self.secrets.get("gateway").unwrap();
+            let identity_key = source_identity_key(
+                self.secrets.as_ref(),
+                self.store.has_gateway_source_history().unwrap(),
+            )
+            .unwrap();
             ExecutePublishRequest {
                 gateway_id: "gateway".to_string(),
                 model_ids: vec!["gpt-5".to_string()],
                 targets,
                 expectations,
+                gateway_revision: gateway.updated_at,
+                credential_revision: gateway_source_hash(&identity_key, &gateway.api_root, &token),
+                model_revisions: model_revisions(
+                    &self.store.models_for_gateway("gateway").unwrap(),
+                ),
                 accept_conflicts: true,
             }
         }
@@ -543,6 +699,32 @@ mod tests {
     fn rejects_empty_publish_selection() {
         assert!(validate_request(&[], &[TargetKind::Workbuddy]).is_err());
         assert!(validate_request(&["gpt-5".to_string()], &[]).is_err());
+        assert!(validate_request(
+            &["gpt-5".to_string(), "gpt-5".to_string()],
+            &[TargetKind::Workbuddy]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn preview_rejects_invalid_legacy_model_configuration() {
+        let fixture = Fixture::new();
+        let mut model = fixture.store.model("gateway::gpt-5").unwrap();
+        model.configuration.temperature = Some(-0.1);
+        fixture.store.save_model(&model).unwrap();
+        let request = PreparePublishRequest {
+            gateway_id: "gateway".to_string(),
+            model_ids: vec!["gpt-5".to_string()],
+            targets: vec![TargetKind::Workbuddy],
+        };
+
+        let error = fixture
+            .coordinator()
+            .preview(&request, &fixture.paths)
+            .unwrap_err();
+
+        assert!(matches!(error, CoreError::Validation(_)));
+        assert!(!fixture.path(TargetKind::Workbuddy).exists());
     }
 
     #[test]
@@ -585,27 +767,33 @@ mod tests {
             model_ids(&fixture.path(TargetKind::Codebuddy)),
             vec!["gpt-5"]
         );
+        assert!(fixture.store.has_gateway_source_history().unwrap());
     }
 
     #[cfg(unix)]
     #[test]
     fn rolls_back_first_target_when_second_write_fails() {
-        use std::os::unix::fs::symlink;
+        use std::os::unix::fs::PermissionsExt;
 
-        let fixture = Fixture::new();
+        let mut fixture = Fixture::new();
         let original = b"[]\n";
         fs::write(fixture.path(TargetKind::Workbuddy), original).unwrap();
-        symlink(
-            fixture.directory.path().join("missing.json"),
-            fixture.path(TargetKind::Codebuddy),
-        )
-        .unwrap();
+        let read_only_directory = fixture.directory.path().join("read-only");
+        fs::create_dir(&read_only_directory).unwrap();
+        let codebuddy_path = read_only_directory.join("models.json");
+        fs::write(&codebuddy_path, original).unwrap();
+        fixture.paths.insert(
+            TargetKind::Codebuddy,
+            codebuddy_path.to_string_lossy().to_string(),
+        );
         let request = fixture.request(vec![TargetKind::Workbuddy, TargetKind::Codebuddy]);
+        fs::set_permissions(&read_only_directory, fs::Permissions::from_mode(0o500)).unwrap();
 
         let result = fixture
             .coordinator()
             .execute(&request, &fixture.paths)
             .unwrap();
+        fs::set_permissions(&read_only_directory, fs::Permissions::from_mode(0o700)).unwrap();
 
         assert!(!result.success);
         assert_eq!(
@@ -618,20 +806,25 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn removes_new_first_target_during_compensation() {
-        use std::os::unix::fs::symlink;
+        use std::os::unix::fs::PermissionsExt;
 
-        let fixture = Fixture::new();
-        symlink(
-            fixture.directory.path().join("missing.json"),
-            fixture.path(TargetKind::Codebuddy),
-        )
-        .unwrap();
+        let mut fixture = Fixture::new();
+        let read_only_directory = fixture.directory.path().join("read-only");
+        fs::create_dir(&read_only_directory).unwrap();
+        let codebuddy_path = read_only_directory.join("models.json");
+        fs::write(&codebuddy_path, b"[]\n").unwrap();
+        fixture.paths.insert(
+            TargetKind::Codebuddy,
+            codebuddy_path.to_string_lossy().to_string(),
+        );
         let request = fixture.request(vec![TargetKind::Workbuddy, TargetKind::Codebuddy]);
+        fs::set_permissions(&read_only_directory, fs::Permissions::from_mode(0o500)).unwrap();
 
         let result = fixture
             .coordinator()
             .execute(&request, &fixture.paths)
             .unwrap();
+        fs::set_permissions(&read_only_directory, fs::Permissions::from_mode(0o700)).unwrap();
 
         assert!(!result.success);
         assert!(!fixture.path(TargetKind::Workbuddy).exists());
@@ -655,6 +848,111 @@ mod tests {
     }
 
     #[test]
+    fn extra_preview_expectation_stops_publish_before_any_write() {
+        let fixture = Fixture::new();
+        let path = fixture.path(TargetKind::Workbuddy);
+        fs::write(&path, b"[]\n").unwrap();
+        let mut request = fixture.request(vec![TargetKind::Workbuddy]);
+        request.expectations.push(request.expectations[0].clone());
+
+        let error = fixture
+            .coordinator()
+            .execute(&request, &fixture.paths)
+            .unwrap_err();
+
+        assert!(matches!(error, CoreError::Conflict(_)));
+        assert_eq!(fs::read(path).unwrap(), b"[]\n");
+        assert!(!fixture.store.has_gateway_source_history().unwrap());
+    }
+
+    #[test]
+    fn resource_revision_change_stops_publish_before_any_write() {
+        let fixture = Fixture::new();
+        let path = fixture.path(TargetKind::Workbuddy);
+        fs::write(&path, b"[]\n").unwrap();
+        let mut request = fixture.request(vec![TargetKind::Workbuddy]);
+        request.model_revisions[0].updated_at = "stale".to_string();
+
+        let error = fixture
+            .coordinator()
+            .execute(&request, &fixture.paths)
+            .unwrap_err();
+
+        assert!(matches!(error, CoreError::Conflict(_)));
+        assert_eq!(fs::read(path).unwrap(), b"[]\n");
+    }
+
+    #[test]
+    fn credential_change_stops_publish_before_any_write() {
+        let fixture = Fixture::new();
+        let path = fixture.path(TargetKind::Workbuddy);
+        fs::write(&path, b"[]\n").unwrap();
+        let request = fixture.request(vec![TargetKind::Workbuddy]);
+        fixture.secrets.set("gateway", "rotated-token").unwrap();
+
+        let error = fixture
+            .coordinator()
+            .execute(&request, &fixture.paths)
+            .unwrap_err();
+
+        assert!(matches!(error, CoreError::Conflict(_)));
+        assert_eq!(fs::read(path).unwrap(), b"[]\n");
+    }
+
+    #[test]
+    fn settings_path_change_stops_publish_before_any_write() {
+        let fixture = Fixture::new();
+        let original_path = fixture.path(TargetKind::Workbuddy);
+        let alternate_path = fixture.directory.path().join("alternate.json");
+        fs::write(&original_path, b"[]\n").unwrap();
+        fs::write(&alternate_path, b"[]\n").unwrap();
+        let request = fixture.request(vec![TargetKind::Workbuddy]);
+        let mut changed_paths = fixture.paths.clone();
+        changed_paths.insert(
+            TargetKind::Workbuddy,
+            alternate_path.to_string_lossy().to_string(),
+        );
+
+        let error = fixture
+            .coordinator()
+            .execute(&request, &changed_paths)
+            .unwrap_err();
+
+        assert!(matches!(error, CoreError::Conflict(_)));
+        assert_eq!(fs::read(original_path).unwrap(), b"[]\n");
+        assert_eq!(fs::read(alternate_path).unwrap(), b"[]\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_retarget_stops_publish_before_any_write() {
+        use std::os::unix::fs::symlink;
+
+        let mut fixture = Fixture::new();
+        let first = fixture.directory.path().join("first.json");
+        let second = fixture.directory.path().join("second.json");
+        let link = fixture.directory.path().join("models-link.json");
+        fs::write(&first, b"[]\n").unwrap();
+        fs::write(&second, b"[]\n").unwrap();
+        symlink(&first, &link).unwrap();
+        fixture
+            .paths
+            .insert(TargetKind::Workbuddy, link.to_string_lossy().to_string());
+        let request = fixture.request(vec![TargetKind::Workbuddy]);
+        fs::remove_file(&link).unwrap();
+        symlink(&second, &link).unwrap();
+
+        let error = fixture
+            .coordinator()
+            .execute(&request, &fixture.paths)
+            .unwrap_err();
+
+        assert!(matches!(error, CoreError::Conflict(_)));
+        assert_eq!(fs::read(first).unwrap(), b"[]\n");
+        assert_eq!(fs::read(second).unwrap(), b"[]\n");
+    }
+
+    #[test]
     fn write_rechecks_drift_immediately_before_replacing_the_file() {
         let fixture = Fixture::new();
         let path = fixture.path(TargetKind::Workbuddy);
@@ -663,7 +961,8 @@ mod tests {
         fs::write(&path, &external).unwrap();
         let target = PreparedTarget {
             kind: TargetKind::Workbuddy,
-            path: path.clone(),
+            configured_path: path.clone(),
+            write_path: path.clone(),
             original: Some(original),
             output: b"[{\"id\":\"gpt-5\"}]\n".to_vec(),
         };
@@ -682,7 +981,8 @@ mod tests {
         fs::write(&path, &external).unwrap();
         let target = PreparedTarget {
             kind: TargetKind::Workbuddy,
-            path: path.clone(),
+            configured_path: path.clone(),
+            write_path: path.clone(),
             original: Some(b"[]\n".to_vec()),
             output: b"[{\"id\":\"gpt-5\"}]\n".to_vec(),
         };
@@ -788,6 +1088,115 @@ mod tests {
     }
 
     #[test]
+    fn keeps_backup_file_when_retention_record_delete_fails() {
+        let fixture = Fixture::new();
+        let path = fixture.path(TargetKind::Workbuddy);
+        let coordinator = fixture.coordinator();
+        for index in 0..BACKUP_RETENTION {
+            coordinator
+                .create_backup(
+                    TargetKind::Workbuddy,
+                    &path,
+                    format!("[{{\"id\":\"model-{index}\"}}]\n").as_bytes(),
+                )
+                .unwrap();
+        }
+        fixture
+            .store
+            .execute_test_sql(
+                r#"
+                CREATE TRIGGER fail_backup_delete
+                BEFORE DELETE ON backups
+                BEGIN
+                    SELECT RAISE(FAIL, 'injected backup delete failure');
+                END;
+                "#,
+            )
+            .unwrap();
+
+        let error = coordinator
+            .create_backup(TargetKind::Workbuddy, &path, b"[{\"id\":\"latest\"}]\n")
+            .unwrap_err();
+        let backups = fixture
+            .store
+            .list_backups(Some(TargetKind::Workbuddy))
+            .unwrap();
+
+        assert!(matches!(error, CoreError::Storage(_)));
+        assert_eq!(backups.len(), BACKUP_RETENTION + 1);
+        assert!(backups
+            .iter()
+            .all(|backup| Path::new(&backup.path).exists()));
+    }
+
+    #[test]
+    fn restores_backup_record_when_retention_file_delete_fails() {
+        let fixture = Fixture::new();
+        let path = fixture.path(TargetKind::Workbuddy);
+        let coordinator = fixture.coordinator();
+        for index in 0..BACKUP_RETENTION {
+            coordinator
+                .create_backup(
+                    TargetKind::Workbuddy,
+                    &path,
+                    format!("[{{\"id\":\"model-{index}\"}}]\n").as_bytes(),
+                )
+                .unwrap();
+        }
+        let oldest = fixture
+            .store
+            .list_backups(Some(TargetKind::Workbuddy))
+            .unwrap()
+            .pop()
+            .unwrap();
+        fs::remove_file(&oldest.path).unwrap();
+        fs::create_dir(&oldest.path).unwrap();
+
+        let error = coordinator
+            .create_backup(TargetKind::Workbuddy, &path, b"[{\"id\":\"latest\"}]\n")
+            .unwrap_err();
+        let backups = fixture
+            .store
+            .list_backups(Some(TargetKind::Workbuddy))
+            .unwrap();
+
+        assert!(matches!(error, CoreError::Storage(_)));
+        assert!(backups.iter().any(|backup| backup.id == oldest.id));
+    }
+
+    #[test]
+    fn removes_backup_file_when_database_record_fails() {
+        let fixture = Fixture::new();
+        let path = fixture.path(TargetKind::Workbuddy);
+        fixture
+            .store
+            .execute_test_sql(
+                r#"
+                CREATE TRIGGER fail_backup_record
+                BEFORE INSERT ON backups
+                BEGIN
+                    SELECT RAISE(FAIL, 'injected backup failure');
+                END;
+                "#,
+            )
+            .unwrap();
+
+        let error = fixture
+            .coordinator()
+            .create_backup(TargetKind::Workbuddy, &path, b"[]\n")
+            .unwrap_err();
+
+        assert!(matches!(error, CoreError::Storage(_)));
+        assert_eq!(
+            fs::read_dir(fixture.directory.path().join("backups/workbuddy"))
+                .unwrap()
+                .count(),
+            0
+        );
+        assert!(fixture.store.list_backups(None).unwrap().is_empty());
+    }
+
+    #[test]
     fn rolls_back_files_when_target_state_transaction_fails() {
         let fixture = Fixture::new();
         for target in [TargetKind::Workbuddy, TargetKind::Codebuddy] {
@@ -828,5 +1237,6 @@ mod tests {
             .target_last_published_hash(TargetKind::Workbuddy)
             .unwrap()
             .is_none());
+        assert!(!fixture.store.has_gateway_source_history().unwrap());
     }
 }

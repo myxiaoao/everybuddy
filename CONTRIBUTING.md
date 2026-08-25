@@ -7,17 +7,7 @@
 前置条件与启动方式见 [README](README.md#本地开发)。安装依赖后，使用以下命令完成本地验证：
 
 ```bash
-pnpm format:check
-pnpm lint
-pnpm typecheck
-pnpm ipc:check
-pnpm test
-pnpm test:coverage
-pnpm build
-pnpm release:check
-cargo fmt --check --manifest-path src-tauri/Cargo.toml
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
-cargo test --manifest-path src-tauri/Cargo.toml
+pnpm verify
 ```
 
 修改安装包、Tauri capability、Updater 或平台相关代码时，还需要执行：

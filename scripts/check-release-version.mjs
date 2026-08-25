@@ -47,8 +47,13 @@ const tag =
 if (tag && tag !== `v${expected}`) {
   throw new Error(`Release tag ${tag} does not match version v${expected}`);
 }
-if (!changelog.includes(`## [${expected}]`)) {
-  throw new Error(`CHANGELOG.md does not contain a ${expected} release entry`);
+const expectedChangelogHeading = tag ? `## [${expected}]` : "## [Unreleased]";
+if (!changelog.includes(expectedChangelogHeading)) {
+  throw new Error(
+    tag
+      ? `CHANGELOG.md does not contain a ${expected} release entry`
+      : "CHANGELOG.md does not contain an Unreleased section",
+  );
 }
 
 const prerelease = expected.split("-", 2)[1];

@@ -15,11 +15,13 @@ import type {
   PublishPreview,
   PublishResult,
   ReasoningEffort,
+  SaveGatewayResult,
   TargetKind,
   TargetImportReport,
   TargetModelState,
   TargetStatus,
 } from "../types";
+import { isValidModelConfiguration } from "./model-configuration";
 
 const demoEnabled =
   !isTauri() && new URLSearchParams(window.location.search).has("demo");
@@ -27,7 +29,7 @@ const demoEnabled =
 export const api = {
   bootstrap: () => call<BootstrapData>("bootstrap"),
   saveGateway: (input: GatewayInput) =>
-    call<GatewayProfile>("save_gateway", { input }),
+    call<SaveGatewayResult>("save_gateway", { input }),
   getGatewayToken: (id: string) => call<string>("get_gateway_token", { id }),
   deleteGateway: (id: string) => call<void>("delete_gateway", { id }),
   discoverModels: (gatewayId: string) =>
@@ -36,8 +38,15 @@ export const api = {
     call<ManagedModel>("add_manual_model", { input }),
   probeModel: (modelKey: string) =>
     call<ProbeSummary>("probe_model", { modelKey }),
-  updateModel: (input: ModelUpdateInput) =>
-    call<ManagedModel>("update_model", { input }),
+  updateModel: (input: ModelUpdateInput) => {
+    if (!isValidModelConfiguration(input.configuration)) {
+      throw {
+        code: "VALIDATION_ERROR",
+        message: "Model configuration contains an invalid numeric value",
+      } satisfies AppError;
+    }
+    return call<ManagedModel>("update_model", { input });
+  },
   getTargetStatuses: () => call<TargetStatus[]>("get_target_statuses"),
   getTargetModelStates: () =>
     call<TargetModelState[]>("get_target_model_states"),
@@ -53,8 +62,13 @@ export const api = {
         ...request,
         expectations: preview.targets.map((target) => ({
           target: target.target,
+          path: target.path,
+          writePath: target.writePath,
           fingerprint: target.fingerprint,
         })),
+        gatewayRevision: preview.gatewayRevision,
+        credentialRevision: preview.credentialRevision,
+        modelRevisions: preview.modelRevisions,
         acceptConflicts,
       },
     }),
@@ -202,6 +216,7 @@ let demoSettings: AppSettings = {
   language: "zh-CN",
   theme: "system",
   selectedTargets: ["workbuddy", "codebuddy"],
+  targetSelectionInitialized: true,
   targetPaths: {
     workbuddy: "~/.workbuddy/models.json",
     codebuddy: "~/.codebuddy/models.json",
@@ -286,6 +301,12 @@ async function demoCall(
     case "save_gateway": {
       const input = (args as { input: GatewayInput }).input;
       const existing = demoGateways.find((gateway) => gateway.id === input.id);
+      const modelsInvalidated = Boolean(
+        existing &&
+        (existing.apiRoot !==
+          input.baseUrl.replace(/\/models\/?$/, "").replace(/\/$/, "") ||
+          demoTokens.get(existing.id) !== input.token),
+      );
       const profile: GatewayProfile = {
         id: input.id ?? `demo-gateway-${demoGateways.length + 1}`,
         name: input.name.trim(),
@@ -300,7 +321,12 @@ async function demoCall(
           )
         : [...demoGateways, profile];
       demoTokens.set(profile.id, input.token);
-      return profile;
+      if (modelsInvalidated) {
+        demoModels = demoModels.filter(
+          (model) => model.gatewayId !== profile.id,
+        );
+      }
+      return { profile, modelsInvalidated } satisfies SaveGatewayResult;
     }
     case "get_gateway_token": {
       const id = String((args as { id: string }).id);
@@ -367,6 +393,7 @@ async function demoCall(
         targets: request.targets.map((target) => ({
           target,
           path: demoSettings.targetPaths[target],
+          writePath: demoSettings.targetPaths[target],
           fingerprint: `demo-${target}`,
           addCount: request.modelIds.length - 1,
           updateCount: 1,
@@ -378,6 +405,17 @@ async function demoCall(
           existingName: request.modelIds[0],
         })),
         warnings: ["Target configuration files contain the API token."],
+        gatewayRevision:
+          demoGateways.find((gateway) => gateway.id === request.gatewayId)
+            ?.updatedAt ?? now,
+        credentialRevision: `demo-credential-${request.gatewayId}`,
+        modelRevisions: demoModels
+          .filter(
+            (model) =>
+              model.gatewayId === request.gatewayId &&
+              request.modelIds.includes(model.id),
+          )
+          .map((model) => ({ key: model.key, updatedAt: model.updatedAt })),
       } satisfies PublishPreview;
     }
     case "execute_publish": {

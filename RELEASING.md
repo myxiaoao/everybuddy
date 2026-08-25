@@ -19,24 +19,14 @@ EveryBuddy 首个发布通道为 Alpha。当前版本 `0.1.0-alpha.1` 对应 Tag
 
    ```bash
    pnpm install --frozen-lockfile
-   pnpm format:check
-   pnpm lint
-   pnpm typecheck
-   pnpm ipc:check
-   pnpm test
-   pnpm test:coverage
-   pnpm build
-   pnpm release:check
-   cargo fmt --check --manifest-path src-tauri/Cargo.toml
-   cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
-   cargo test --manifest-path src-tauri/Cargo.toml
+   pnpm verify
    pnpm tauri build
    ```
 
-3. 创建与版本一致的 annotated Tag，并把 Tag 推送到 GitHub。
-4. 在 GitHub Actions 中批准 `release` Environment deployment。
-5. 等待 Release workflow 完成。Workflow 不配置 Apple 或 Windows signing identity，创建 Draft Prerelease，并验证 Updater manifest、`.sig`、安装包和校验和。
-6. 下载 Draft 中的安装包、`latest.json`、`.sig` 和 `SHA256SUMS.txt`，复核文件名称、版本和 SHA-256。
+3. 在 GitHub Actions 中从 `main` 手动运行 Release workflow，并批准 `release` Environment deployment。该 Preflight 只构建和检查安装包及 `.sig`，不会创建 Tag 或 Release。
+4. Preflight 通过后，创建与版本一致的 annotated Tag，并把 Tag 推送到 GitHub。
+5. 再次批准 `release` Environment deployment，等待 Tag 触发的 Release workflow 完成。Workflow 不配置 Apple 或 Windows signing identity，创建 Draft Prerelease，并验证 Updater manifest、`.sig`、安装包和校验和。
+6. 下载 Draft 中的安装包、`latest.json`、`.sig` 和 `SHA256SUMS.txt`，复核文件名称、版本和 SHA-256，并使用 `gh attestation verify <asset> --repo myxiaoao/everybuddy --signer-workflow myxiaoao/everybuddy/.github/workflows/release.yml` 验证来源证明。
 7. 在干净环境中安装并启动 macOS 与 Windows 包，确认 Gatekeeper 和 SmartScreen 警告与 README 一致，并验证启动、配置读取和发布预览。Alpha Prerelease 使用手动更新，不把应用内 Updater 检查作为发布门槛。
 8. 保持 Prerelease 状态，手动发布 Draft。
 

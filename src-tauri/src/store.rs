@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::Path,
     str::FromStr,
     sync::{Mutex, MutexGuard},
@@ -97,8 +97,22 @@ impl Store {
         Ok(profile)
     }
 
+    #[cfg(test)]
     pub fn save_gateway(&self, profile: &GatewayProfile) -> CoreResult<()> {
-        self.connection()?.execute(
+        self.save_gateway_with_provenance(profile, false, None, None)
+    }
+
+    pub fn save_gateway_with_provenance(
+        &self,
+        profile: &GatewayProfile,
+        invalidate_models: bool,
+        source_hash: Option<&str>,
+        previous_source_hash: Option<&str>,
+    ) -> CoreResult<()> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let stored_source_hashes = gateway_source_hashes(&transaction, &profile.id)?;
+        transaction.execute(
             r#"INSERT INTO gateway_profiles
                (id, name, api_root, token_ref, created_at, updated_at)
                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -116,26 +130,138 @@ impl Store {
                 profile.updated_at
             ],
         )?;
+        if let Some(source_hash) = source_hash {
+            if invalidate_models {
+                for retired_source_hash in &stored_source_hashes {
+                    transaction.execute(
+                        "INSERT INTO deleted_gateway_sources (source_hash, deleted_at) VALUES (?1, ?2)
+                         ON CONFLICT(source_hash) DO UPDATE SET deleted_at = excluded.deleted_at",
+                        params![retired_source_hash, Utc::now().to_rfc3339()],
+                    )?;
+                }
+                transaction.execute(
+                    "DELETE FROM gateway_source_identities WHERE gateway_id = ?1",
+                    [&profile.id],
+                )?;
+            }
+            if invalidate_models
+                && previous_source_hash.is_some_and(|previous| {
+                    previous != source_hash
+                        && !stored_source_hashes.iter().any(|stored| stored == previous)
+                })
+            {
+                transaction.execute(
+                    "INSERT INTO deleted_gateway_sources (source_hash, deleted_at) VALUES (?1, ?2)
+                     ON CONFLICT(source_hash) DO UPDATE SET deleted_at = excluded.deleted_at",
+                    params![previous_source_hash, Utc::now().to_rfc3339()],
+                )?;
+            }
+            transaction.execute(
+                "INSERT INTO gateway_source_identities (gateway_id, source_hash) VALUES (?1, ?2)
+                 ON CONFLICT(gateway_id, source_hash) DO NOTHING",
+                params![profile.id, source_hash],
+            )?;
+            transaction.execute(
+                "DELETE FROM deleted_gateway_sources WHERE source_hash = ?1",
+                [source_hash],
+            )?;
+        }
+        if invalidate_models {
+            transaction.execute(
+                "INSERT OR IGNORE INTO stale_gateway_models (gateway_id) VALUES (?1)",
+                [&profile.id],
+            )?;
+        }
+        transaction.commit()?;
         Ok(())
     }
 
-    pub fn delete_gateway(&self, id: &str) -> CoreResult<()> {
-        self.connection()?
-            .execute("DELETE FROM gateway_profiles WHERE id = ?1", [id])?;
+    pub fn delete_gateway_with_tombstone(
+        &self,
+        id: &str,
+        source_hashes: &[String],
+    ) -> CoreResult<()> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let mut all_source_hashes = gateway_source_hashes(&transaction, id)?;
+        all_source_hashes.extend(source_hashes.iter().cloned());
+        all_source_hashes.sort_unstable();
+        all_source_hashes.dedup();
+        for source_hash in all_source_hashes {
+            transaction.execute(
+                "INSERT INTO deleted_gateway_sources (source_hash, deleted_at) VALUES (?1, ?2)
+                 ON CONFLICT(source_hash) DO UPDATE SET deleted_at = excluded.deleted_at",
+                params![source_hash, Utc::now().to_rfc3339()],
+            )?;
+        }
+        transaction.execute("DELETE FROM gateway_profiles WHERE id = ?1", [id])?;
+        transaction.commit()?;
         Ok(())
+    }
+
+    pub fn gateway_source_roots(&self, id: &str) -> CoreResult<Vec<String>> {
+        let gateway = self.gateway(id)?;
+        let mut roots = vec![gateway.api_root];
+        roots.extend(
+            self.models_for_gateway_including_stale(id)?
+                .into_iter()
+                .filter_map(|model| model.configuration.endpoint_override),
+        );
+        roots.sort_unstable();
+        roots.dedup();
+        Ok(roots)
+    }
+
+    #[cfg(test)]
+    pub fn record_gateway_source_identities(
+        &self,
+        gateway_id: &str,
+        source_hashes: &[String],
+    ) -> CoreResult<()> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        for source_hash in source_hashes {
+            transaction.execute(
+                "INSERT OR IGNORE INTO gateway_source_identities (gateway_id, source_hash)
+                 VALUES (?1, ?2)",
+                params![gateway_id, source_hash],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn has_gateway_source_history(&self) -> CoreResult<bool> {
+        Ok(self.connection()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM gateway_source_identities)
+                 OR EXISTS(SELECT 1 FROM deleted_gateway_sources)",
+            [],
+            |row| row.get(0),
+        )?)
     }
 
     pub fn list_models(&self) -> CoreResult<Vec<ManagedModel>> {
-        self.query_models(None)
+        let connection = self.connection()?;
+        let stale_gateways = stale_gateway_ids(&connection)?;
+        let mut models = query_models(&connection, None)?;
+        models.retain(|model| !stale_gateways.contains(&model.gateway_id));
+        Ok(models)
     }
 
     pub fn models_for_gateway(&self, gateway_id: &str) -> CoreResult<Vec<ManagedModel>> {
-        self.query_models(Some(gateway_id))
+        let connection = self.connection()?;
+        if gateway_models_are_stale(&connection, gateway_id)? {
+            return Ok(Vec::new());
+        }
+        query_models(&connection, Some(gateway_id))
     }
 
-    fn query_models(&self, gateway_id: Option<&str>) -> CoreResult<Vec<ManagedModel>> {
+    pub fn models_for_gateway_including_stale(
+        &self,
+        gateway_id: &str,
+    ) -> CoreResult<Vec<ManagedModel>> {
         let connection = self.connection()?;
-        query_models(&connection, gateway_id)
+        query_models(&connection, Some(gateway_id))
     }
 
     pub fn import_missing_serialized<T, F>(&self, operation: F) -> CoreResult<T>
@@ -143,14 +269,32 @@ impl Store {
         F: FnOnce(
             Vec<GatewayProfile>,
             Vec<ManagedModel>,
-        ) -> CoreResult<(T, Vec<GatewayProfile>, Vec<ManagedModel>)>,
+            HashSet<String>,
+            bool,
+        ) -> CoreResult<(
+            T,
+            Vec<(GatewayProfile, String)>,
+            Vec<(String, String)>,
+            Vec<ManagedModel>,
+        )>,
     {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let gateways = query_gateways(&transaction)?;
         let models = query_models(&transaction, None)?;
-        let (result, new_gateways, new_models) = operation(gateways, models)?;
-        for gateway in &new_gateways {
+        let deleted_sources = transaction
+            .prepare("SELECT source_hash FROM deleted_gateway_sources")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<HashSet<_>, _>>()?;
+        let source_history_exists = !deleted_sources.is_empty()
+            || transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM gateway_source_identities)",
+                [],
+                |row| row.get(0),
+            )?;
+        let (result, new_gateways, source_identities, new_models) =
+            operation(gateways, models, deleted_sources, source_history_exists)?;
+        for (gateway, source_hash) in &new_gateways {
             transaction.execute(
                 r#"INSERT OR IGNORE INTO gateway_profiles
                    (id, name, api_root, token_ref, created_at, updated_at)
@@ -163,6 +307,18 @@ impl Store {
                     gateway.created_at,
                     gateway.updated_at
                 ],
+            )?;
+            transaction.execute(
+                "INSERT OR IGNORE INTO gateway_source_identities (gateway_id, source_hash)
+                 VALUES (?1, ?2)",
+                params![gateway.id, source_hash],
+            )?;
+        }
+        for (gateway_id, source_hash) in &source_identities {
+            transaction.execute(
+                "INSERT OR IGNORE INTO gateway_source_identities (gateway_id, source_hash)
+                 VALUES (?1, ?2)",
+                params![gateway_id, source_hash],
             )?;
         }
         for model in &new_models {
@@ -230,6 +386,10 @@ impl Store {
         for model in models {
             insert_model(&transaction, model)?;
         }
+        transaction.execute(
+            "DELETE FROM stale_gateway_models WHERE gateway_id = ?1",
+            [&expected_gateway.id],
+        )?;
         transaction.commit()?;
         Ok(())
     }
@@ -271,27 +431,27 @@ impl Store {
     pub fn save_target_states(&self, updates: &[TargetStateUpdate]) -> CoreResult<()> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        for update in updates {
+        save_target_state_updates(&transaction, updates)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn save_publish_state(
+        &self,
+        gateway_id: &str,
+        source_hashes: &[String],
+        updates: &[TargetStateUpdate],
+    ) -> CoreResult<()> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        for source_hash in source_hashes {
             transaction.execute(
-                r#"INSERT INTO target_states
-                   (target, path, last_seen_hash, last_published_hash, schema_name, updated_at)
-                   VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                   ON CONFLICT(target) DO UPDATE SET
-                     path = excluded.path,
-                     last_seen_hash = excluded.last_seen_hash,
-                     last_published_hash = COALESCE(excluded.last_published_hash, target_states.last_published_hash),
-                     schema_name = excluded.schema_name,
-                     updated_at = excluded.updated_at"#,
-                params![
-                    update.target.as_str(),
-                    update.path,
-                    update.seen_hash,
-                    update.published_hash,
-                    update.schema,
-                    Utc::now().to_rfc3339()
-                ],
+                "INSERT OR IGNORE INTO gateway_source_identities (gateway_id, source_hash)
+                 VALUES (?1, ?2)",
+                params![gateway_id, source_hash],
             )?;
         }
+        save_target_state_updates(&transaction, updates)?;
         transaction.commit()?;
         Ok(())
     }
@@ -374,6 +534,10 @@ impl Store {
             .get("selected_targets")
             .and_then(|value| serde_json::from_str(value).ok())
             .unwrap_or_default();
+        let target_selection_initialized = values
+            .get("target_selection_initialized")
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_else(|| values.contains_key("selected_targets"));
         let target_paths = values
             .get("target_paths")
             .and_then(|value| serde_json::from_str(value).ok())
@@ -389,6 +553,7 @@ impl Store {
                 .cloned()
                 .unwrap_or_else(|| "system".to_string()),
             selected_targets,
+            target_selection_initialized,
             target_paths,
         })
     }
@@ -400,6 +565,10 @@ impl Store {
             ("language", settings.language.clone()),
             ("theme", settings.theme.clone()),
             ("selected_targets", to_json(&settings.selected_targets)?),
+            (
+                "target_selection_initialized",
+                settings.target_selection_initialized.to_string(),
+            ),
             ("target_paths", to_json(&settings.target_paths)?),
         ];
         for (key, value) in values {
@@ -412,6 +581,59 @@ impl Store {
         transaction.commit()?;
         Ok(())
     }
+}
+
+fn save_target_state_updates(
+    transaction: &rusqlite::Transaction<'_>,
+    updates: &[TargetStateUpdate],
+) -> CoreResult<()> {
+    for update in updates {
+        transaction.execute(
+            r#"INSERT INTO target_states
+                   (target, path, last_seen_hash, last_published_hash, schema_name, updated_at)
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                   ON CONFLICT(target) DO UPDATE SET
+                     path = excluded.path,
+                     last_seen_hash = excluded.last_seen_hash,
+                     last_published_hash = COALESCE(excluded.last_published_hash, target_states.last_published_hash),
+                     schema_name = excluded.schema_name,
+                     updated_at = excluded.updated_at"#,
+            params![
+                update.target.as_str(),
+                update.path,
+                update.seen_hash,
+                update.published_hash,
+                update.schema,
+                Utc::now().to_rfc3339()
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+fn stale_gateway_ids(connection: &Connection) -> CoreResult<HashSet<String>> {
+    let mut statement = connection.prepare("SELECT gateway_id FROM stale_gateway_models")?;
+    let gateway_ids = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<HashSet<_>, _>>()?;
+    Ok(gateway_ids)
+}
+
+fn gateway_models_are_stale(connection: &Connection, gateway_id: &str) -> CoreResult<bool> {
+    Ok(connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM stale_gateway_models WHERE gateway_id = ?1)",
+        [gateway_id],
+        |row| row.get(0),
+    )?)
+}
+
+fn gateway_source_hashes(connection: &Connection, gateway_id: &str) -> CoreResult<Vec<String>> {
+    let mut statement = connection
+        .prepare("SELECT source_hash FROM gateway_source_identities WHERE gateway_id = ?1")?;
+    let source_hashes = statement
+        .query_map([gateway_id], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(source_hashes)
 }
 
 #[cfg(test)]
@@ -553,6 +775,67 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, CoreError::Conflict(_)));
+    }
+
+    #[test]
+    fn provenance_change_invalidates_models_in_the_gateway_transaction() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("everybuddy.db")).unwrap();
+        let profile = GatewayProfile {
+            id: "gateway".to_string(),
+            name: "Gateway".to_string(),
+            api_root: "https://api.example.com/v1".to_string(),
+            token_ref: "gateway".to_string(),
+            created_at: "2026-08-20T00:00:00Z".to_string(),
+            updated_at: "2026-08-20T00:00:00Z".to_string(),
+        };
+        store.save_gateway(&profile).unwrap();
+        store
+            .save_model(&ManagedModel {
+                key: "gateway::model".to_string(),
+                gateway_id: "gateway".to_string(),
+                id: "model".to_string(),
+                name: "Model".to_string(),
+                vendor: "custom".to_string(),
+                capabilities: CapabilitySet::default(),
+                configuration: Default::default(),
+                evidence: Vec::new(),
+                metadata: json!({"id": "model"}),
+                updated_at: "2026-08-20T00:00:00Z".to_string(),
+            })
+            .unwrap();
+        let mut edited = profile;
+        edited.api_root = "https://changed.example.com/v1".to_string();
+
+        store
+            .save_gateway_with_provenance(&edited, true, Some("new-source"), None)
+            .unwrap();
+
+        assert!(store.models_for_gateway("gateway").unwrap().is_empty());
+        let stale_snapshot = store.models_for_gateway_including_stale("gateway").unwrap();
+        assert_eq!(stale_snapshot.len(), 1);
+
+        store
+            .replace_gateway_models_if_unchanged(&edited, &stale_snapshot, &stale_snapshot)
+            .unwrap();
+
+        assert_eq!(store.models_for_gateway("gateway").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn persisted_empty_target_selection_is_initialized() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("everybuddy.db")).unwrap();
+        store
+            .execute_test_sql(
+                "INSERT INTO app_settings (key, value) VALUES ('selected_targets', '[]')",
+            )
+            .unwrap();
+
+        let settings = store.settings(HashMap::new()).unwrap();
+
+        assert!(settings.target_selection_initialized);
+        assert!(settings.selected_targets.is_empty());
     }
 
     #[test]

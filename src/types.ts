@@ -23,6 +23,11 @@ export interface GatewayInput {
   token: string;
 }
 
+export interface SaveGatewayResult {
+  profile: GatewayProfile;
+  modelsInvalidated: boolean;
+}
+
 export interface ManualModelInput {
   gatewayId: string;
   id: string;
@@ -132,6 +137,7 @@ export interface AppSettings {
   language: Language;
   theme: Theme;
   selectedTargets: TargetKind[];
+  targetSelectionInitialized: boolean;
   targetPaths: Record<TargetKind, string>;
 }
 
@@ -153,6 +159,7 @@ export interface PreparePublishRequest {
 export interface TargetPreview {
   target: TargetKind;
   path: string;
+  writePath: string;
   fingerprint: string | null;
   addCount: number;
   updateCount: number;
@@ -169,6 +176,9 @@ export interface PublishPreview {
   targets: TargetPreview[];
   conflicts: ModelConflict[];
   warnings: string[];
+  gatewayRevision: string;
+  credentialRevision: string;
+  modelRevisions: Array<{ key: string; updatedAt: string }>;
 }
 
 export interface PublishResult {

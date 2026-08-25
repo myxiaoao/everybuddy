@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::error::{CoreError, CoreResult};
 
-pub(super) const SCHEMA_VERSION: i64 = 1;
+pub(super) const SCHEMA_VERSION: i64 = 2;
 
 pub(super) fn migrate(
     connection: &mut Connection,
@@ -82,6 +82,23 @@ pub(super) fn migrate(
         CREATE TABLE IF NOT EXISTS app_settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS deleted_gateway_sources (
+            source_hash TEXT PRIMARY KEY,
+            deleted_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS gateway_source_identities (
+            gateway_id TEXT NOT NULL,
+            source_hash TEXT NOT NULL,
+            PRIMARY KEY(gateway_id, source_hash),
+            FOREIGN KEY(gateway_id) REFERENCES gateway_profiles(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS stale_gateway_models (
+            gateway_id TEXT PRIMARY KEY,
+            FOREIGN KEY(gateway_id) REFERENCES gateway_profiles(id) ON DELETE CASCADE
         );
         "#,
     )?;

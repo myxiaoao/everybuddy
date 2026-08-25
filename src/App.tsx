@@ -48,7 +48,6 @@ import {
   defaultSettings,
   displayTarget,
   isTargetPublishable,
-  sameTargets,
 } from "./lib/target-utils";
 
 function App() {
@@ -69,7 +68,9 @@ function App() {
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
-  const [busyGatewayId, setBusyGatewayId] = useState<string | null>(null);
+  const [refreshingGatewayIds, setRefreshingGatewayIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [message, setMessage] = useState("");
   const [error, setError] = useState<AppError | null>(null);
   const [gatewayDialog, setGatewayDialog] = useState(false);
@@ -107,6 +108,8 @@ function App() {
   const [importDetailsExpanded, setImportDetailsExpanded] = useState(false);
   const pendingActionRef = useRef<(() => void | Promise<void>) | null>(null);
   const targetPollErrorLoggedRef = useRef(false);
+  const selectedGatewayIdRef = useRef<string | null>(null);
+  const refreshGenerationsRef = useRef(new Map<string, number>());
   const {
     currentVersion,
     availableUpdate,
@@ -164,43 +167,24 @@ function App() {
     selectedTargets,
   });
 
-  const loadTargets = useCallback(
-    async (settingsSnapshot: AppSettings = settings) => {
-      try {
-        const [nextTargets, nextModelStates] = await Promise.all([
-          api.getTargetStatuses(),
-          api.getTargetModelStates(),
-        ]);
-        setTargets(nextTargets);
-        setTargetModelStates(nextModelStates);
-        targetPollErrorLoggedRef.current = false;
-        const available = nextTargets
-          .filter(isTargetPublishable)
-          .map((target) => target.kind);
-        const nextSelectedTargets = settingsSnapshot.selectedTargets.filter(
-          (target) => available.includes(target),
-        );
-        if (
-          !sameTargets(settingsSnapshot.selectedTargets, nextSelectedTargets)
-        ) {
-          const nextSettings = {
-            ...settingsSnapshot,
-            selectedTargets: nextSelectedTargets,
-          };
-          setSettings(nextSettings);
-          await api.saveSettings(nextSettings);
-        }
-        return nextModelStates;
-      } catch (caught) {
-        if (!targetPollErrorLoggedRef.current) {
-          reportFrontendWarning("target-state.refresh", caught);
-          targetPollErrorLoggedRef.current = true;
-        }
-        return null;
+  const loadTargets = useCallback(async () => {
+    try {
+      const [nextTargets, nextModelStates] = await Promise.all([
+        api.getTargetStatuses(),
+        api.getTargetModelStates(),
+      ]);
+      setTargets(nextTargets);
+      setTargetModelStates(nextModelStates);
+      targetPollErrorLoggedRef.current = false;
+      return nextModelStates;
+    } catch (caught) {
+      if (!targetPollErrorLoggedRef.current) {
+        reportFrontendWarning("target-state.refresh", caught);
+        targetPollErrorLoggedRef.current = true;
       }
-    },
-    [settings],
-  );
+      return null;
+    }
+  }, []);
 
   useEffect(() => {
     void (async () => {
@@ -209,10 +193,8 @@ function App() {
         const availableTargets = data.targets
           .filter(isTargetPublishable)
           .map((target) => target.kind);
-        const selectedTargets = data.settings.selectedTargets.length
-          ? data.settings.selectedTargets.filter((target) =>
-              availableTargets.includes(target),
-            )
+        const selectedTargets = data.settings.targetSelectionInitialized
+          ? data.settings.selectedTargets
           : availableTargets;
         setGateways(data.gateways);
         setGatewayConnectionStates(
@@ -244,13 +226,18 @@ function App() {
             }),
           );
         }
-        const nextSettings = { ...data.settings, selectedTargets };
+        const nextSettings = {
+          ...data.settings,
+          selectedTargets,
+          targetSelectionInitialized: true,
+        };
         setSettings(nextSettings);
-        if (!sameTargets(data.settings.selectedTargets, selectedTargets)) {
+        if (!data.settings.targetSelectionInitialized) {
           await api.saveSettings(nextSettings);
         }
         const firstGateway = data.gateways[0] ?? null;
         setSelectedGatewayId(firstGateway?.id ?? null);
+        selectedGatewayIdRef.current = firstGateway?.id ?? null;
         const firstModel =
           data.models.find((model) => model.gatewayId === firstGateway?.id) ??
           null;
@@ -322,6 +309,7 @@ function App() {
     }
     runAfterDiscard(() => {
       setSelectedGatewayId(id);
+      selectedGatewayIdRef.current = id;
       setQuery("");
       const firstModel = models.find((model) => model.gatewayId === id);
       setActiveKey(firstModel?.key ?? null);
@@ -352,6 +340,10 @@ function App() {
     }
   }
 
+  function requestEditGateway(gateway: GatewayProfile) {
+    runAfterDiscard(() => openEditGateway(gateway));
+  }
+
   function closeGatewayDialog() {
     setGatewayDialog(false);
     setEditingGateway(null);
@@ -362,7 +354,17 @@ function App() {
     setBusy(true);
     setError(null);
     try {
-      const profile = await api.saveGateway(input);
+      const { profile, modelsInvalidated } = await api.saveGateway(input);
+      if (modelsInvalidated) {
+        const invalidatedKeys = models
+          .filter((model) => model.gatewayId === profile.id)
+          .map((model) => model.key);
+        setModels((current) =>
+          current.filter((model) => model.gatewayId !== profile.id),
+        );
+        clearSelectionOverrides(invalidatedKeys);
+        if (selectedGatewayIdRef.current === profile.id) setActiveKey(null);
+      }
       setGateways((current) => {
         const exists = current.some((gateway) => gateway.id === profile.id);
         return exists
@@ -376,6 +378,7 @@ function App() {
         [profile.id]: "idle",
       }));
       setSelectedGatewayId(profile.id);
+      selectedGatewayIdRef.current = profile.id;
       closeGatewayDialog();
       await refreshModels(profile.id);
       setCompactView("models");
@@ -387,7 +390,9 @@ function App() {
   }
 
   async function refreshModels(gatewayId: string) {
-    setBusyGatewayId(gatewayId);
+    const generation = (refreshGenerationsRef.current.get(gatewayId) ?? 0) + 1;
+    refreshGenerationsRef.current.set(gatewayId, generation);
+    setRefreshingGatewayIds((current) => new Set(current).add(gatewayId));
     setGatewayConnectionStates((current) => ({
       ...current,
       [gatewayId]: "refreshing",
@@ -395,17 +400,21 @@ function App() {
     setError(null);
     try {
       const discovered = await api.discoverModels(gatewayId);
+      if (refreshGenerationsRef.current.get(gatewayId) !== generation) return;
       setModels((current) => [
         ...current.filter((model) => model.gatewayId !== gatewayId),
         ...discovered,
       ]);
-      setActiveKey(discovered[0]?.key ?? null);
+      if (selectedGatewayIdRef.current === gatewayId) {
+        setActiveKey(discovered[0]?.key ?? null);
+      }
       setGatewayConnectionStates((current) => ({
         ...current,
         [gatewayId]: "connected",
       }));
       setMessage(t("modelCount", { count: discovered.length }));
     } catch (caught) {
+      if (refreshGenerationsRef.current.get(gatewayId) !== generation) return;
       setGatewayConnectionStates((current) => ({
         ...current,
         [gatewayId]: "error",
@@ -413,7 +422,13 @@ function App() {
       showError(caught);
       throw caught;
     } finally {
-      setBusyGatewayId(null);
+      if (refreshGenerationsRef.current.get(gatewayId) === generation) {
+        setRefreshingGatewayIds((current) => {
+          const next = new Set(current);
+          next.delete(gatewayId);
+          return next;
+        });
+      }
     }
   }
 
@@ -456,6 +471,7 @@ function App() {
         current.filter((model) => model.gatewayId !== gateway.id),
       );
       setSelectedGatewayId(remaining[0]?.id ?? null);
+      selectedGatewayIdRef.current = remaining[0]?.id ?? null;
       clearSelectionOverrides(
         models
           .filter((item) => item.gatewayId === gateway.id)
@@ -535,13 +551,20 @@ function App() {
     const selectedTargets = settings.selectedTargets.includes(target)
       ? settings.selectedTargets.filter((kind) => kind !== target)
       : [...settings.selectedTargets, target];
-    const next = { ...settings, selectedTargets };
+    const next = {
+      ...settings,
+      selectedTargets,
+      targetSelectionInitialized: true,
+    };
     setSettings(next);
+    setBusy(true);
     try {
       await api.saveSettings(next);
     } catch (caught) {
       setSettings(settings);
       showError(caught);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -601,7 +624,7 @@ function App() {
       const saved = await api.saveSettings(next);
       setSettings(saved);
       setSettingsDialog(false);
-      await loadTargets(saved);
+      await loadTargets();
     } catch (caught) {
       showError(caught);
     } finally {
@@ -671,7 +694,9 @@ function App() {
   }
 
   const hasGateway = gateways.length > 0;
-  const selectedGatewayRefreshing = busyGatewayId === selectedGatewayId;
+  const selectedGatewayRefreshing = selectedGatewayId
+    ? refreshingGatewayIds.has(selectedGatewayId)
+    : false;
   const localizedErrorMessage = error ? localizedError(error, t) : null;
   const locale = settings.language === "zh-CN" ? "zh-CN" : "en-US";
 
@@ -724,12 +749,13 @@ function App() {
             currentVersion={currentVersion}
             gateways={gateways}
             selectedId={selectedGatewayId}
-            busyId={busyGatewayId}
+            disabled={busy}
+            refreshingIds={refreshingGatewayIds}
             connectionStates={gatewayConnectionStates}
             t={t}
             onSelect={selectGateway}
             onAdd={openAddGateway}
-            onEdit={(gateway) => void openEditGateway(gateway)}
+            onEdit={requestEditGateway}
             onRefresh={requestRefreshModels}
             onDelete={requestRemoveGateway}
             onOpenSettings={() => setSettingsDialog(true)}

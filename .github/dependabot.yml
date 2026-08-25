@@ -2,8 +2,14 @@ version: 2
 updates:
   - package-ecosystem: npm
     directory: /
+    open-pull-requests-limit: 5
     schedule:
       interval: weekly
+    labels:
+      - dependencies
+      - javascript
+    commit-message:
+      prefix: chore(deps)
     groups:
       frontend-dependencies:
         update-types:
@@ -11,11 +17,23 @@ updates:
           - patch
         patterns:
           - "*"
+      frontend-major-dev-tools:
+        dependency-type: development
+        update-types:
+          - major
+        patterns:
+          - "*"
 
   - package-ecosystem: cargo
     directory: /src-tauri
+    open-pull-requests-limit: 3
     schedule:
       interval: weekly
+    labels:
+      - dependencies
+      - rust
+    commit-message:
+      prefix: chore(deps)
     groups:
       rust-dependencies:
         update-types:
@@ -26,8 +44,14 @@ updates:
 
   - package-ecosystem: github-actions
     directory: /
+    open-pull-requests-limit: 3
     schedule:
       interval: weekly
+    labels:
+      - dependencies
+      - github_actions
+    commit-message:
+      prefix: chore(deps)
     groups:
       workflow-actions:
         update-types:

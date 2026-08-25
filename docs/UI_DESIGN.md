@@ -106,7 +106,8 @@ Dialog 包含名称、API Base URL、Token Key。主要操作是「保存并发�
 - `url` 和 `apiKey` 默认来自当前 API Profile；模型级请求地址覆盖只改变发布结果，不改变模型发现地址。
 - `supportedEfforts` 使用 Checkbox Group，包含 `minimal`、`low`、`medium`、`high`、`xhigh` 和 `max`。默认 Effort 和兼容 Effort 只能从已选档位中选择。
 - Capability 以 OpenRouter 精确匹配结果为准；未匹配或目录不可用时回退 Gateway metadata 和保守默认值。辅助文字展示 OpenRouter、API metadata、Probe、Target 导入或人工覆盖等实际 Evidence 来源。
-- OpenRouter 只能确认 `reasoning_effort` 参数是否存在，不能据此生成具体强度。`supportedEfforts` 只使用 Gateway 明确返回值、Target 导入值或人工覆盖。界面分别提示「已自动匹配」「未发现可靠范围」和「当前选择已覆盖自动匹配结果」；未知模型不默认勾选任何档位。
+- OpenRouter 的 Batch/Free 变体、Alias 和 Canonical slug 可以关联到基础能力记录，但界面与发布预览始终显示 Gateway 实际 Model ID；Pro 等独立型号不得通过前缀模糊匹配到基础型号。
+- OpenRouter 明确返回 `reasoning.supported_efforts` 时自动勾选对应强度；`none` 转换为「允许关闭思考」，不显示为强度选项。只有 `reasoning_effort` 参数名称而没有明确范围时不推测档位。界面分别提示「已自动匹配」「未发现可靠范围」和「当前选择已覆盖自动匹配结果」；未知模型不默认勾选任何档位。
 - 手动添加与自动发现复用同一 OpenRouter 匹配逻辑。API 刷新只更新未人工修改的自动配置，不覆盖手动添加、Target 导入或带人工 Evidence 的配置。
 - 关闭 Reasoning 时清除不再有效的 Reasoning 参数；开启「仅 Reasoning 模式」时同步关闭「允许关闭 Reasoning」。
 

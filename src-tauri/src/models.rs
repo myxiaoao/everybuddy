@@ -4,6 +4,8 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayProfile {
@@ -22,6 +24,13 @@ pub struct GatewayInput {
     pub name: String,
     pub base_url: String,
     pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveGatewayResult {
+    pub profile: GatewayProfile,
+    pub models_invalidated: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -98,6 +107,18 @@ pub struct ModelConfiguration {
     pub use_custom_protocol: bool,
 }
 
+impl ModelConfiguration {
+    pub fn has_valid_numeric_values(&self) -> bool {
+        [self.max_input_tokens, self.max_output_tokens]
+            .into_iter()
+            .flatten()
+            .all(|value| (1..=MAX_SAFE_INTEGER).contains(&value))
+            && self
+                .temperature
+                .is_none_or(|value| value.is_finite() && value >= 0.0)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
 pub enum EvidenceSource {
@@ -120,7 +141,7 @@ pub struct CapabilityEvidence {
     pub checked_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedModel {
     pub key: String,
@@ -256,6 +277,8 @@ pub struct PreparePublishRequest {
 #[serde(rename_all = "camelCase")]
 pub struct TargetExpectation {
     pub target: TargetKind,
+    pub path: String,
+    pub write_path: String,
     pub fingerprint: Option<String>,
 }
 
@@ -266,7 +289,17 @@ pub struct ExecutePublishRequest {
     pub model_ids: Vec<String>,
     pub targets: Vec<TargetKind>,
     pub expectations: Vec<TargetExpectation>,
+    pub gateway_revision: String,
+    pub credential_revision: String,
+    pub model_revisions: Vec<ModelRevision>,
     pub accept_conflicts: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRevision {
+    pub key: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -282,6 +315,7 @@ pub struct ModelConflict {
 pub struct TargetPreview {
     pub target: TargetKind,
     pub path: String,
+    pub write_path: String,
     pub fingerprint: Option<String>,
     pub add_count: usize,
     pub update_count: usize,
@@ -294,6 +328,9 @@ pub struct PublishPreview {
     pub targets: Vec<TargetPreview>,
     pub conflicts: Vec<ModelConflict>,
     pub warnings: Vec<String>,
+    pub gateway_revision: String,
+    pub credential_revision: String,
+    pub model_revisions: Vec<ModelRevision>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -330,6 +367,7 @@ pub struct AppSettings {
     pub language: String,
     pub theme: String,
     pub selected_targets: Vec<TargetKind>,
+    pub target_selection_initialized: bool,
     pub target_paths: HashMap<TargetKind, String>,
 }
 
@@ -339,6 +377,7 @@ pub struct SaveSettingsInput {
     pub language: String,
     pub theme: String,
     pub selected_targets: Vec<TargetKind>,
+    pub target_selection_initialized: bool,
     pub target_paths: HashMap<TargetKind, String>,
 }
 
