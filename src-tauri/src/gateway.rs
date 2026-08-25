@@ -85,11 +85,11 @@ impl GatewayClient {
                     .ok_or_else(|| {
                         CoreError::Protocol("A model entry is missing its id".to_string())
                     })?;
-                let name = item
+                let gateway_name = item
                     .get("name")
                     .or_else(|| item.get("display_name"))
                     .and_then(Value::as_str)
-                    .unwrap_or(id);
+                    .filter(|name| !name.trim().is_empty());
                 let key = format!("{}::{}", profile.id, id);
                 let existing_model = existing.iter().find(|model| model.key == key);
                 let preserved_evidence: Vec<_> = existing_model
@@ -113,6 +113,9 @@ impl GatewayClient {
                 let market_model = market_catalog
                     .as_deref()
                     .and_then(|catalog| catalog.find(id, &inferred_vendor));
+                let name = gateway_name
+                    .or_else(|| market_model.and_then(MarketModel::display_name))
+                    .unwrap_or(id);
                 let vendor = market_model
                     .and_then(MarketModel::vendor)
                     .unwrap_or(inferred_vendor);

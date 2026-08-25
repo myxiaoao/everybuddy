@@ -466,7 +466,10 @@ fn build_manual_model(
         gateway_id: gateway_id.to_string(),
         id: id.to_string(),
         name: if name.trim().is_empty() {
-            id.to_string()
+            market_model
+                .and_then(MarketModel::display_name)
+                .unwrap_or(id)
+                .to_string()
         } else {
             name.trim().to_string()
         },
@@ -537,6 +540,24 @@ mod tests {
         assert_eq!(model.vendor, "custom");
         assert_eq!(model.capabilities, Default::default());
         assert!(model.configuration.reasoning.supported_efforts.is_empty());
+    }
+
+    #[test]
+    fn manual_model_uses_openrouter_name_and_dynamic_provider_as_fallbacks() {
+        let market_model: MarketModel = serde_json::from_value(serde_json::json!({
+            "id": "future-lab/new-model",
+            "name": "Future Lab: New Model",
+            "architecture": {
+                "input_modalities": ["text"],
+                "output_modalities": ["text"]
+            }
+        }))
+        .unwrap();
+
+        let model = build_manual_model("gateway-1", "new-model", "", "", Some(&market_model));
+
+        assert_eq!(model.name, "Future Lab: New Model");
+        assert_eq!(model.vendor, "future-lab");
     }
 
     #[test]

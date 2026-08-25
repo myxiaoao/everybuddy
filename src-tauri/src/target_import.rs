@@ -707,7 +707,6 @@ fn imported_gateway_name(target: TargetKind, api_root: &str) -> String {
 
 fn normalized_vendor(raw: Option<&str>, model_id: &str) -> String {
     raw.and_then(market_catalog::normalize_vendor)
-        .map(ToString::to_string)
         .unwrap_or_else(|| infer_vendor(model_id))
 }
 
