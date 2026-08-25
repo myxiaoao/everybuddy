@@ -54,9 +54,12 @@ impl CapabilityResolver {
             ),
         ];
 
+        let metadata_is_non_text = explicit_non_text_output(metadata).is_some();
         evidence.extend(metadata_evidence(metadata, &now));
-        if let Some(market_model) = market_model {
-            evidence.extend(market_evidence(market_model, &now));
+        if !metadata_is_non_text {
+            if let Some(market_model) = market_model {
+                evidence.extend(market_evidence(market_model, &now));
+            }
         }
         evidence.extend(existing.iter().cloned());
 
@@ -175,6 +178,13 @@ fn market_evidence(model: &MarketModel, now: &str) -> Vec<CapabilityEvidence> {
 }
 
 fn metadata_evidence(metadata: &Value, now: &str) -> Vec<CapabilityEvidence> {
+    if let Some(path) = explicit_non_text_output(metadata) {
+        return ["toolCall", "images", "reasoning"]
+            .into_iter()
+            .map(|capability| evidence(capability, false, EvidenceSource::Metadata, path, now))
+            .collect();
+    }
+
     let mut result: Vec<_> = ["toolCall", "images", "reasoning"]
         .into_iter()
         .filter_map(|capability| {
@@ -198,6 +208,27 @@ fn metadata_evidence(metadata: &Value, now: &str) -> Vec<CapabilityEvidence> {
     }
 
     result
+}
+
+fn explicit_non_text_output(metadata: &Value) -> Option<&'static str> {
+    [
+        "/output_modalities",
+        "/outputModalities",
+        "/architecture/output_modalities",
+    ]
+    .into_iter()
+    .find(|path| {
+        metadata
+            .pointer(path)
+            .and_then(Value::as_array)
+            .is_some_and(|modalities| {
+                !modalities.is_empty()
+                    && !modalities
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .any(|modality| modality.eq_ignore_ascii_case("text"))
+            })
+    })
 }
 
 fn metadata_capability(metadata: &Value, capability: &str) -> Option<(bool, &'static str)> {
@@ -394,7 +425,9 @@ pub fn configuration_from_sources(
     market_model: Option<&MarketModel>,
     capabilities: &CapabilitySet,
 ) -> ModelConfiguration {
-    if market_model.is_some_and(|model| !model.supports_chat_configuration()) {
+    if explicit_non_text_output(metadata).is_some()
+        || market_model.is_some_and(|model| !model.supports_chat_configuration())
+    {
         return ModelConfiguration::default();
     }
 
@@ -421,7 +454,7 @@ pub fn configuration_from_sources(
         })
         .filter(|effort| supported_efforts.is_empty() || supported_efforts.contains(effort));
 
-    ModelConfiguration {
+    let mut configuration = ModelConfiguration {
         endpoint_override: None,
         max_input_tokens: market_model
             .and_then(MarketModel::max_input_tokens)
@@ -430,7 +463,8 @@ pub fn configuration_from_sources(
                     metadata,
                     &["maxInputTokens", "max_input_tokens", "context_window"],
                 )
-            }),
+            })
+            .filter(|value| (1..=crate::models::MAX_SAFE_INTEGER).contains(value)),
         max_output_tokens: market_model
             .and_then(MarketModel::max_output_tokens)
             .or_else(|| {
@@ -438,10 +472,12 @@ pub fn configuration_from_sources(
                     metadata,
                     &["maxOutputTokens", "max_output_tokens", "max_tokens"],
                 )
-            }),
+            })
+            .filter(|value| (1..=crate::models::MAX_SAFE_INTEGER).contains(value)),
         temperature: market_model
             .and_then(MarketModel::temperature)
-            .or_else(|| optional_f64(metadata, &["temperature"])),
+            .or_else(|| optional_f64(metadata, &["temperature"]))
+            .filter(|value| value.is_finite() && *value >= 0.0),
         only_reasoning: optional_bool(metadata, &["onlyReasoning", "only_reasoning"])
             .unwrap_or(false),
         reasoning: ReasoningConfiguration {
@@ -466,7 +502,20 @@ pub fn configuration_from_sources(
         },
         use_custom_protocol: optional_bool(metadata, &["useCustomProtocol", "use_custom_protocol"])
             .unwrap_or(false),
+    };
+    if !capabilities.supports_reasoning {
+        configuration.only_reasoning = false;
+        configuration.reasoning = Default::default();
+    } else {
+        configuration.reasoning.effort = configuration.reasoning.effort.filter(|effort| {
+            configuration.reasoning.supported_efforts.is_empty()
+                || configuration.reasoning.supported_efforts.contains(effort)
+        });
+        if configuration.only_reasoning {
+            configuration.reasoning.can_disable_thinking = false;
+        }
     }
+    configuration
 }
 
 fn optional_u64(metadata: &Value, keys: &[&str]) -> Option<u64> {
@@ -579,6 +628,67 @@ mod tests {
     fn unknown_model_uses_conservative_defaults() {
         let (capabilities, _) = CapabilityResolver::resolve("private-model", &Value::Null, &[]);
         assert_eq!(capabilities, CapabilitySet::default());
+    }
+
+    #[test]
+    fn explicit_non_text_gateway_metadata_disables_chat_projection() {
+        let metadata = serde_json::json!({
+            "architecture": {
+                "input_modalities": ["text", "image"],
+                "output_modalities": ["image"]
+            },
+            "supported_parameters": ["tools", "reasoning_effort"],
+            "maxInputTokens": 32_768,
+            "temperature": 0.7
+        });
+
+        let (capabilities, _) = CapabilityResolver::resolve("image-generator", &metadata, &[]);
+        let configuration =
+            configuration_from_metadata("image-generator", &metadata, &capabilities);
+
+        assert_eq!(capabilities, CapabilitySet::default());
+        assert_eq!(configuration, ModelConfiguration::default());
+    }
+
+    #[test]
+    fn filters_unsafe_numeric_values_from_external_metadata() {
+        let metadata = serde_json::json!({
+            "maxInputTokens": 0,
+            "maxOutputTokens": 9_007_199_254_740_992_u64,
+            "temperature": -0.1
+        });
+
+        let configuration =
+            configuration_from_metadata("unsafe-model", &metadata, &CapabilitySet::default());
+
+        assert_eq!(configuration.max_input_tokens, None);
+        assert_eq!(configuration.max_output_tokens, None);
+        assert_eq!(configuration.temperature, None);
+    }
+
+    #[test]
+    fn normalizes_inconsistent_external_reasoning_configuration() {
+        let metadata = serde_json::json!({
+            "onlyReasoning": true,
+            "reasoning": {
+                "effort": "high",
+                "supportedEfforts": ["low"],
+                "canDisableThinking": true
+            }
+        });
+        let reasoning = CapabilitySet {
+            supports_reasoning: true,
+            ..Default::default()
+        };
+
+        let configuration = configuration_from_metadata("reasoner", &metadata, &reasoning);
+        let unsupported =
+            configuration_from_metadata("plain-model", &metadata, &CapabilitySet::default());
+
+        assert_eq!(configuration.reasoning.effort, None);
+        assert!(!configuration.reasoning.can_disable_thinking);
+        assert!(!unsupported.only_reasoning);
+        assert_eq!(unsupported.reasoning, Default::default());
     }
 
     #[test]

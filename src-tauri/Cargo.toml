@@ -23,11 +23,13 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-process = "2"
+tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 atomicwrites = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 hex = "0.4"
+hmac = "0.13"
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.32", features = ["backup", "bundled"] }

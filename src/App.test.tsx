@@ -410,7 +410,7 @@ describe("EveryBuddy workspace", () => {
     );
   });
 
-  it("keeps newly saved settings when target availability is refreshed", async () => {
+  it("keeps target preferences when target availability is refreshed", async () => {
     const current = await api.bootstrap();
     const data = {
       ...current,
@@ -441,16 +441,17 @@ describe("EveryBuddy workspace", () => {
     fireEvent.click(within(dialog).getByRole("radio", { name: "深色" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
 
-    await waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(saveSettings).toHaveBeenCalledOnce());
     expect(
       saveSettings.mock.calls[saveSettings.mock.calls.length - 1]?.[0],
     ).toMatchObject({
       theme: "dark",
-      selectedTargets: ["workbuddy"],
+      selectedTargets: ["workbuddy", "codebuddy"],
+      targetSelectionInitialized: true,
     });
   });
 
-  it("disables conflicting API and model changes while a gateway is refreshing", async () => {
+  it("scopes conflicting actions to the gateway being refreshed", async () => {
     let finishRefresh:
       | ((models: Awaited<ReturnType<typeof api.discoverModels>>) => void)
       | undefined;
@@ -470,12 +471,128 @@ describe("EveryBuddy workspace", () => {
         screen.getByRole("button", { name: "手动添加模型" }),
       ).toBeDisabled(),
     );
-    expect(screen.getByRole("button", { name: "添加 API" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "添加 API" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "编辑 API" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "移除" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /预览并发布/ })).toBeDisabled();
     for (const button of screen.getAllByRole("button", { name: "刷新模型" })) {
       expect(button).toBeDisabled();
     }
     finishRefresh?.([]);
+  });
+
+  it("preserves an explicitly empty target selection", async () => {
+    const data = await api.bootstrap();
+    vi.spyOn(api, "bootstrap").mockResolvedValueOnce({
+      ...data,
+      settings: {
+        ...data.settings,
+        selectedTargets: [],
+        targetSelectionInitialized: true,
+      },
+    });
+    const saveSettings = vi.spyOn(api, "saveSettings");
+
+    render(<App />);
+
+    await screen.findAllByText("GPT-5.6");
+    expect(
+      screen.getByRole("checkbox", { name: "WorkBuddy" }),
+    ).not.toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: "CodeBuddy" }),
+    ).not.toBeChecked();
+    expect(screen.getByRole("button", { name: /预览并发布/ })).toBeDisabled();
+    expect(saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("initializes targets only on the first launch", async () => {
+    const data = await api.bootstrap();
+    vi.spyOn(api, "bootstrap").mockResolvedValueOnce({
+      ...data,
+      settings: {
+        ...data.settings,
+        selectedTargets: [],
+        targetSelectionInitialized: false,
+      },
+    });
+    const saveSettings = vi
+      .spyOn(api, "saveSettings")
+      .mockImplementation(async (settings) => settings);
+
+    render(<App />);
+
+    await screen.findAllByText("GPT-5.6");
+    expect(saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        selectedTargets: ["workbuddy", "codebuddy"],
+        targetSelectionInitialized: true,
+      }),
+    );
+  });
+
+  it("does not let a background gateway refresh replace the active model", async () => {
+    const data = await api.bootstrap();
+    const resolvers = new Map<
+      string,
+      (models: Awaited<ReturnType<typeof api.discoverModels>>) => void
+    >();
+    vi.spyOn(api, "discoverModels").mockImplementation(
+      (gatewayId) =>
+        new Promise((resolve) => {
+          resolvers.set(gatewayId, resolve);
+        }),
+    );
+    render(<App />);
+
+    await screen.findAllByText("GPT-5.6");
+    fireEvent.click(screen.getAllByRole("button", { name: "刷新模型" })[0]);
+    await waitFor(() => expect(resolvers.has("demo-gateway")).toBe(true));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Local Relay, http:\/\/127\.0\.0\.1:8080\/v1/,
+      }),
+    );
+    await waitFor(() =>
+      expect(document.querySelector(".model-summary h3")).toHaveTextContent(
+        "GLM 4.5",
+      ),
+    );
+    fireEvent.click(screen.getAllByRole("button", { name: "刷新模型" })[0]);
+    await waitFor(() => expect(resolvers.has("demo-relay")).toBe(true));
+
+    resolvers.get("demo-gateway")?.(
+      data.models.filter((model) => model.gatewayId === "demo-gateway"),
+    );
+    await waitFor(() =>
+      expect(document.querySelector(".model-summary h3")).toHaveTextContent(
+        "GLM 4.5",
+      ),
+    );
+    expect(screen.getByRole("button", { name: /预览并发布/ })).toBeDisabled();
+
+    resolvers.get("demo-relay")?.(
+      data.models.filter((model) => model.gatewayId === "demo-relay"),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("button", { name: "刷新模型" })[0],
+      ).toBeEnabled(),
+    );
+  });
+
+  it("guards unsaved model edits before editing the gateway", async () => {
+    const getGatewayToken = vi.spyOn(api, "getGatewayToken");
+    render(<App />);
+
+    await screen.findAllByText("GPT-5.6");
+    fireEvent.click(screen.getByRole("switch", { name: "推理模式" }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑 API" }));
+
+    const discard = screen.getByRole("dialog", { name: "丢弃未保存的更改" });
+    expect(getGatewayToken).not.toHaveBeenCalled();
+    fireEvent.click(within(discard).getByRole("button", { name: "丢弃更改" }));
+    await screen.findByRole("dialog", { name: "编辑 API" });
+    expect(getGatewayToken).toHaveBeenCalledWith("demo-gateway");
   });
 });

@@ -15,6 +15,7 @@ use crate::{
     capability::{configuration_from_metadata, evidence, infer_vendor, CapabilityResolver},
     error::{CoreError, CoreResult},
     gateway::{normalize_api_root, object_without_secret, value_contains_secret},
+    gateway_service::{gateway_source_hash, source_identity_key},
     market_catalog,
     models::{
         CapabilitySet, EvidenceSource, GatewayProfile, ManagedModel, TargetImportIssue,
@@ -53,21 +54,37 @@ impl<'a> TargetImportService<'a> {
 
     pub fn bootstrap_import(&self) -> CoreResult<TargetImportResult> {
         let written_secret_refs = RefCell::new(Vec::new());
-        let import = self.store.import_missing_serialized(|gateways, models| {
-            let mut context =
-                ImportContext::from_snapshots(gateways, models, Arc::clone(&self.secrets))?;
-            let mut report = TargetImportReport::default();
-            let mut baselines = HashMap::new();
+        let import = self.store.import_missing_serialized(
+            |gateways, models, deleted_sources, source_history_exists| {
+                let identity_key =
+                    source_identity_key(self.secrets.as_ref(), source_history_exists)?;
+                let mut context = ImportContext::from_snapshots(
+                    gateways,
+                    models,
+                    deleted_sources,
+                    Arc::clone(&self.secrets),
+                    identity_key,
+                )?;
+                let mut report = TargetImportReport::default();
+                let mut baselines = HashMap::new();
 
-            for target in [TargetKind::Workbuddy, TargetKind::Codebuddy] {
-                self.import_target(target, &mut context, &mut baselines, &mut report)?;
-            }
+                for target in [TargetKind::Workbuddy, TargetKind::Codebuddy] {
+                    let import =
+                        self.import_target(target, &mut context, &mut baselines, &mut report);
+                    *written_secret_refs.borrow_mut() = context.written_secret_refs.clone();
+                    import?;
+                }
 
-            *written_secret_refs.borrow_mut() = context.written_secret_refs.clone();
-            report.imported_gateway_count = context.new_gateways.len();
-            report.imported_model_count = context.new_models.len();
-            Ok((report, context.new_gateways, context.new_models))
-        });
+                report.imported_gateway_count = context.new_gateways.len();
+                report.imported_model_count = context.new_models.len();
+                Ok((
+                    report,
+                    context.new_gateways,
+                    context.source_identities,
+                    context.new_models,
+                ))
+            },
+        );
         let report = match import {
             Ok(report) => report,
             Err(error) => {
@@ -104,7 +121,7 @@ impl<'a> TargetImportService<'a> {
         };
 
         for raw in document.models() {
-            let entry = match ParsedEntry::parse(target, raw) {
+            let entry = match ParsedEntry::parse_for_import(target, raw) {
                 Ok(entry) => entry,
                 Err(parse_issue) => {
                     report.issues.push(parse_issue);
@@ -141,7 +158,10 @@ impl<'a> TargetImportService<'a> {
         }
 
         match context.exact_model_keys(&entry) {
-            keys if keys.len() == 1 => return Ok(()),
+            keys if keys.len() == 1 => {
+                context.record_source_identity(&keys[0], &entry);
+                return Ok(());
+            }
             keys if keys.len() > 1 => {
                 report.issues.push(issue(
                     entry.target,
@@ -231,7 +251,7 @@ fn match_target_state(
     let mut unmatched_count = 0;
     let mut skipped_count = 0;
     for raw in document.models() {
-        match ParsedEntry::parse(target, raw) {
+        match ParsedEntry::parse_for_match(target, raw) {
             Ok(entry) => {
                 let keys = context.exact_model_keys(&entry);
                 if keys.len() == 1 {
@@ -258,20 +278,33 @@ struct ImportContext {
     secrets: Arc<dyn SecretStore>,
     gateways: Vec<GatewaySnapshot>,
     models: Vec<ManagedModel>,
-    new_gateways: Vec<GatewayProfile>,
+    new_gateways: Vec<(GatewayProfile, String)>,
     new_models: Vec<ManagedModel>,
     written_secret_refs: Vec<String>,
+    deleted_sources: HashSet<String>,
+    identity_key: String,
+    source_identities: Vec<(String, String)>,
 }
 
 impl ImportContext {
     fn load(store: &Store, secrets: Arc<dyn SecretStore>) -> CoreResult<Self> {
-        Self::from_snapshots(store.list_gateways()?, store.list_models()?, secrets)
+        let identity_key =
+            source_identity_key(secrets.as_ref(), store.has_gateway_source_history()?)?;
+        Self::from_snapshots(
+            store.list_gateways()?,
+            store.list_models()?,
+            HashSet::new(),
+            secrets,
+            identity_key,
+        )
     }
 
     fn from_snapshots(
         gateways: Vec<GatewayProfile>,
         models: Vec<ManagedModel>,
+        deleted_sources: HashSet<String>,
         secrets: Arc<dyn SecretStore>,
+        identity_key: String,
     ) -> CoreResult<Self> {
         let gateways = gateways
             .into_iter()
@@ -297,6 +330,9 @@ impl ImportContext {
             new_gateways: Vec::new(),
             new_models: Vec::new(),
             written_secret_refs: Vec::new(),
+            deleted_sources,
+            identity_key,
+            source_identities: Vec::new(),
         })
     }
 
@@ -310,8 +346,10 @@ impl ImportContext {
                     .iter()
                     .find(|gateway| gateway.profile.id == model.gateway_id)?;
                 (gateway.token.as_deref() == Some(entry.token.as_str())
-                    && self.model_effective_root(model).as_deref() == Some(entry.api_root.as_str()))
-                .then(|| model.key.clone())
+                    && self.model_effective_root(model).as_deref() == Some(entry.api_root.as_str())
+                    && model.configuration.use_custom_protocol
+                        == entry.configuration.use_custom_protocol)
+                    .then(|| model.key.clone())
             })
             .collect()
     }
@@ -334,7 +372,20 @@ impl ImportContext {
     fn is_new_gateway(&self, gateway_id: &str) -> bool {
         self.new_gateways
             .iter()
-            .any(|gateway| gateway.id == gateway_id)
+            .any(|(gateway, _)| gateway.id == gateway_id)
+    }
+
+    fn record_source_identity(&mut self, model_key: &str, entry: &ParsedEntry) {
+        let gateway_id = self
+            .models
+            .iter()
+            .find(|model| model.key == model_key)
+            .map(|model| model.gateway_id.clone());
+        if let Some(gateway_id) = gateway_id {
+            let source_hash =
+                gateway_source_hash(&self.identity_key, &entry.api_root, &entry.token);
+            self.source_identities.push((gateway_id, source_hash));
+        }
     }
 
     fn resolve_gateway(
@@ -352,7 +403,12 @@ impl ImportContext {
             .map(|gateway| gateway.profile.id.clone())
             .collect();
         if exact.len() == 1 {
-            return Ok(exact.into_iter().next());
+            let gateway_id = exact.into_iter().next().expect("one exact gateway");
+            let source_hash =
+                gateway_source_hash(&self.identity_key, &entry.api_root, &entry.token);
+            self.source_identities
+                .push((gateway_id.clone(), source_hash));
+            return Ok(Some(gateway_id));
         }
         if exact.len() > 1 {
             report.issues.push(issue(
@@ -397,7 +453,12 @@ impl ImportContext {
             }
             self.written_secret_refs.push(token_ref);
             self.gateways[index].token = Some(entry.token.clone());
-            return Ok(Some(self.gateways[index].profile.id.clone()));
+            let gateway_id = self.gateways[index].profile.id.clone();
+            let source_hash =
+                gateway_source_hash(&self.identity_key, &entry.api_root, &entry.token);
+            self.source_identities
+                .push((gateway_id.clone(), source_hash));
+            return Ok(Some(gateway_id));
         }
 
         if self.gateways.iter().any(|gateway| {
@@ -409,6 +470,14 @@ impl ImportContext {
                 "credentialUnavailable",
                 "The system credential store is unavailable for a matching API profile".to_string(),
             ));
+            return Ok(None);
+        }
+
+        if self.deleted_sources.contains(&gateway_source_hash(
+            &self.identity_key,
+            &entry.api_root,
+            &entry.token,
+        )) {
             return Ok(None);
         }
 
@@ -437,7 +506,8 @@ impl ImportContext {
             token: Some(entry.token.clone()),
             credential_unavailable: false,
         });
-        self.new_gateways.push(profile);
+        let source_hash = gateway_source_hash(&self.identity_key, &entry.api_root, &entry.token);
+        self.new_gateways.push((profile, source_hash));
         Ok(Some(id))
     }
 }
@@ -483,7 +553,19 @@ struct ParsedEntry {
 }
 
 impl ParsedEntry {
-    fn parse(target: TargetKind, raw: &Value) -> Result<Self, TargetImportIssue> {
+    fn parse_for_import(target: TargetKind, raw: &Value) -> Result<Self, TargetImportIssue> {
+        Self::parse(target, raw, false)
+    }
+
+    fn parse_for_match(target: TargetKind, raw: &Value) -> Result<Self, TargetImportIssue> {
+        Self::parse(target, raw, true)
+    }
+
+    fn parse(
+        target: TargetKind,
+        raw: &Value,
+        allow_custom_protocol: bool,
+    ) -> Result<Self, TargetImportIssue> {
         let object = raw.as_object().ok_or_else(|| {
             issue(
                 target,
@@ -509,6 +591,16 @@ impl ParsedEntry {
             model_ref.clone(),
             "missingToken",
         )?;
+        let explicit_name = object
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        let explicit_vendor = object
+            .get("vendor")
+            .and_then(Value::as_str)
+            .and_then(market_catalog::normalize_vendor);
         let mut metadata = object_without_secret(raw);
         if value_contains_secret(&metadata, &token) {
             return Err(issue(
@@ -543,7 +635,15 @@ impl ParsedEntry {
                     "The target model contains invalid advanced parameters".to_string(),
                 )
             })?;
-        if configuration.use_custom_protocol {
+        if !configuration.has_valid_numeric_values() {
+            return Err(issue(
+                target,
+                model_ref.clone(),
+                "invalidParameters",
+                "Token limits and Temperature contain invalid numeric values".to_string(),
+            ));
+        }
+        if configuration.use_custom_protocol && !allow_custom_protocol {
             return Err(issue(
                 target,
                 model_ref,
@@ -598,19 +698,30 @@ impl ParsedEntry {
         ];
         if let Some(metadata_object) = metadata.as_object_mut() {
             metadata_object.insert("everybuddySource".to_string(), json!("targetImport"));
+            let identity_override = json!({
+                "name": explicit_name.clone(),
+                "vendor": explicit_vendor.clone(),
+            });
+            let identity_override = identity_override
+                .as_object()
+                .expect("identity override is an object")
+                .iter()
+                .filter(|(_, value)| !value.is_null())
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<serde_json::Map<_, _>>();
+            if !identity_override.is_empty() {
+                metadata_object.insert(
+                    "everybuddyIdentityOverride".to_string(),
+                    Value::Object(identity_override),
+                );
+            }
         }
         let (mut capabilities, evidence) =
             CapabilityResolver::resolve(&model_id, &metadata, &imported_evidence);
         capabilities.reasoning_efforts = imported_capabilities.reasoning_efforts;
         let configuration = configuration_from_metadata(&model_id, raw, &capabilities);
-        let name = object
-            .get("name")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or(&model_id)
-            .trim()
-            .to_string();
-        let vendor = normalized_vendor(object.get("vendor").and_then(Value::as_str), &model_id);
+        let name = explicit_name.unwrap_or_else(|| model_id.clone());
+        let vendor = explicit_vendor.unwrap_or_else(|| infer_vendor(&model_id));
         let signature = fingerprint(
             serde_json::to_vec(&json!({
                 "name": name,
@@ -703,11 +814,6 @@ fn imported_gateway_name(target: TargetKind, api_root: &str) -> String {
         .and_then(|url| url.host_str().map(ToString::to_string))
         .map(|host| format!("{host} (Imported)"))
         .unwrap_or_else(|| format!("{} Import", target.display_name()))
-}
-
-fn normalized_vendor(raw: Option<&str>, model_id: &str) -> String {
-    raw.and_then(market_catalog::normalize_vendor)
-        .unwrap_or_else(|| infer_vendor(model_id))
 }
 
 fn reasoning_effort_name(value: &crate::models::ReasoningEffort) -> &'static str {

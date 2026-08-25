@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+    collections::HashSet,
+    sync::{Arc, MutexGuard},
+};
 
 use chrono::Utc;
 use serde_json::{json, Value};
@@ -15,10 +18,10 @@ use crate::{
         AppSettings, BackupRecord, BootstrapData, EvidenceSource, ExecutePublishRequest,
         GatewayInput, GatewayProfile, ManagedModel, ManualModelInput, ModelConfiguration,
         ModelUpdateInput, PreparePublishRequest, ProbeSummary, PublishPreview, PublishResult,
-        SaveSettingsInput, TargetKind, TargetModelState, TargetStatus,
+        SaveGatewayResult, SaveSettingsInput, TargetKind, TargetModelState, TargetStatus,
     },
     publish::PublishCoordinator,
-    target::{default_target_paths, target_statuses},
+    target::{default_target_paths, target_path, target_statuses, target_write_path},
     target_import::{get_target_model_states as read_target_model_states, TargetImportService},
     AppState,
 };
@@ -27,6 +30,7 @@ type CommandResult<T> = Result<T, CommandError>;
 
 #[tauri::command]
 pub fn bootstrap(state: State<'_, AppState>) -> CommandResult<BootstrapData> {
+    let _mutation = lock_app_mutation(state.inner())?;
     let settings = state
         .store
         .settings(default_target_paths().map_err(CommandError::from)?)
@@ -54,7 +58,8 @@ pub fn bootstrap(state: State<'_, AppState>) -> CommandResult<BootstrapData> {
 pub fn save_gateway(
     input: GatewayInput,
     state: State<'_, AppState>,
-) -> CommandResult<GatewayProfile> {
+) -> CommandResult<SaveGatewayResult> {
+    let _mutation = lock_app_mutation(state.inner())?;
     let name = input.name.trim();
     if name.is_empty() {
         return Err(
@@ -90,14 +95,18 @@ pub fn save_gateway(
         updated_at: now,
     };
 
-    GatewayService::new(&state.store, Arc::clone(&state.secrets))
+    let models_invalidated = GatewayService::new(&state.store, Arc::clone(&state.secrets))
         .save(&profile, input.token.trim())
         .map_err(CommandError::from)?;
-    Ok(profile)
+    Ok(SaveGatewayResult {
+        profile,
+        models_invalidated,
+    })
 }
 
 #[tauri::command]
 pub fn get_gateway_token(id: String, state: State<'_, AppState>) -> CommandResult<String> {
+    let _mutation = lock_app_mutation(state.inner())?;
     let profile = state.store.gateway(&id).map_err(CommandError::from)?;
     state
         .secrets
@@ -107,6 +116,7 @@ pub fn get_gateway_token(id: String, state: State<'_, AppState>) -> CommandResul
 
 #[tauri::command]
 pub fn delete_gateway(id: String, state: State<'_, AppState>) -> CommandResult<()> {
+    let _mutation = lock_app_mutation(state.inner())?;
     GatewayService::new(&state.store, Arc::clone(&state.secrets))
         .delete(&id)
         .map_err(CommandError::from)
@@ -117,18 +127,22 @@ pub async fn discover_models(
     gateway_id: String,
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<ManagedModel>> {
-    let profile = state
-        .store
-        .gateway(&gateway_id)
-        .map_err(CommandError::from)?;
-    let token = state
-        .secrets
-        .get(&profile.token_ref)
-        .map_err(CommandError::from)?;
-    let existing = state
-        .store
-        .models_for_gateway(&gateway_id)
-        .map_err(CommandError::from)?;
+    let (profile, token, existing) = {
+        let _mutation = lock_app_mutation(state.inner())?;
+        let profile = state
+            .store
+            .gateway(&gateway_id)
+            .map_err(CommandError::from)?;
+        let token = state
+            .secrets
+            .get(&profile.token_ref)
+            .map_err(CommandError::from)?;
+        let existing = state
+            .store
+            .models_for_gateway_including_stale(&gateway_id)
+            .map_err(CommandError::from)?;
+        (profile, token, existing)
+    };
     let mut models = state
         .gateway_client
         .discover(&profile, &token, &existing)
@@ -136,6 +150,17 @@ pub async fn discover_models(
         .map_err(CommandError::from)?;
     preserve_local_models(&mut models, &existing);
     models.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    let _mutation = lock_app_mutation(state.inner())?;
+    let current_profile = state
+        .store
+        .gateway(&gateway_id)
+        .map_err(CommandError::from)?;
+    let current_token = state
+        .secrets
+        .get(&current_profile.token_ref)
+        .map_err(CommandError::from)?;
+    ensure_gateway_snapshot_unchanged(&profile, &token, &current_profile, &current_token)
+        .map_err(CommandError::from)?;
     state
         .store
         .replace_gateway_models_if_unchanged(&profile, &existing, &models)
@@ -148,39 +173,60 @@ pub async fn add_manual_model(
     input: ManualModelInput,
     state: State<'_, AppState>,
 ) -> CommandResult<ManagedModel> {
-    state
-        .store
-        .gateway(&input.gateway_id)
-        .map_err(CommandError::from)?;
-
-    let id = input.id.trim();
+    let id = input.id.trim().to_string();
     if id.is_empty() {
         return Err(crate::error::CoreError::Validation("Model ID is required".to_string()).into());
     }
-    let existing = state
-        .store
-        .models_for_gateway(&input.gateway_id)
-        .map_err(CommandError::from)?;
-    if existing.iter().any(|model| model.id == id) {
-        return Err(crate::error::CoreError::Validation(
-            "This model ID already exists in the selected API source".to_string(),
+    let gateway_snapshot = {
+        let _mutation = lock_app_mutation(state.inner())?;
+        let gateway = state
+            .store
+            .gateway(&input.gateway_id)
+            .map_err(CommandError::from)?;
+        ensure_model_id_available(
+            &state
+                .store
+                .models_for_gateway(&input.gateway_id)
+                .map_err(CommandError::from)?,
+            &id,
         )
-        .into());
-    }
+        .map_err(CommandError::from)?;
+        gateway
+    };
 
     let lookup_vendor = if input.vendor.trim().is_empty() {
-        infer_vendor(id)
+        infer_vendor(&id)
     } else {
         input.vendor.trim().to_ascii_lowercase()
     };
-    let market_model = state.gateway_client.market_model(id, &lookup_vendor).await;
+    let market_model = state.gateway_client.market_model(&id, &lookup_vendor).await;
     let model = build_manual_model(
         &input.gateway_id,
-        id,
+        &id,
         &input.name,
         &input.vendor,
         market_model.as_ref(),
     );
+    let _mutation = lock_app_mutation(state.inner())?;
+    let current_gateway = state
+        .store
+        .gateway(&input.gateway_id)
+        .map_err(CommandError::from)?;
+    if current_gateway != gateway_snapshot {
+        return Err(crate::error::CoreError::Conflict(
+            "The API profile changed while the model was being added; reload and try again"
+                .to_string(),
+        )
+        .into());
+    }
+    ensure_model_id_available(
+        &state
+            .store
+            .models_for_gateway(&input.gateway_id)
+            .map_err(CommandError::from)?,
+        &id,
+    )
+    .map_err(CommandError::from)?;
     state.store.save_model(&model).map_err(CommandError::from)?;
     Ok(model)
 }
@@ -190,15 +236,20 @@ pub async fn probe_model(
     model_key: String,
     state: State<'_, AppState>,
 ) -> CommandResult<ProbeSummary> {
-    let mut model = state.store.model(&model_key).map_err(CommandError::from)?;
-    let profile = state
-        .store
-        .gateway(&model.gateway_id)
-        .map_err(CommandError::from)?;
-    let token = state
-        .secrets
-        .get(&profile.token_ref)
-        .map_err(CommandError::from)?;
+    let (mut model, profile, token) = {
+        let _mutation = lock_app_mutation(state.inner())?;
+        let model = state.store.model(&model_key).map_err(CommandError::from)?;
+        let profile = state
+            .store
+            .gateway(&model.gateway_id)
+            .map_err(CommandError::from)?;
+        let token = state
+            .secrets
+            .get(&profile.token_ref)
+            .map_err(CommandError::from)?;
+        (model, profile, token)
+    };
+    let model_snapshot = model.clone();
     let (probe_evidence, notes) = state
         .gateway_client
         .probe(&profile, &token, &model)
@@ -210,6 +261,24 @@ pub async fn probe_model(
     model.capabilities = capabilities;
     model.evidence = evidence;
     model.updated_at = Utc::now().to_rfc3339();
+    let _mutation = lock_app_mutation(state.inner())?;
+    let current_profile = state
+        .store
+        .gateway(&model.gateway_id)
+        .map_err(CommandError::from)?;
+    let current_token = state
+        .secrets
+        .get(&current_profile.token_ref)
+        .map_err(CommandError::from)?;
+    let current_model = state.store.model(&model_key).map_err(CommandError::from)?;
+    ensure_gateway_snapshot_unchanged(&profile, &token, &current_profile, &current_token)
+        .map_err(CommandError::from)?;
+    if current_model != model_snapshot {
+        return Err(crate::error::CoreError::Conflict(
+            "The model changed while it was being probed; reload and try again".to_string(),
+        )
+        .into());
+    }
     state.store.save_model(&model).map_err(CommandError::from)?;
     Ok(ProbeSummary {
         model,
@@ -223,6 +292,7 @@ pub fn update_model(
     input: ModelUpdateInput,
     state: State<'_, AppState>,
 ) -> CommandResult<ManagedModel> {
+    let _mutation = lock_app_mutation(state.inner())?;
     let mut model = state
         .store
         .model(&input.model_key)
@@ -237,6 +307,8 @@ pub fn update_model(
     }
     let configuration = normalize_model_configuration(input.configuration, &input.capabilities)
         .map_err(CommandError::from)?;
+    let normalized_vendor = vendor.to_ascii_lowercase();
+    record_identity_override(&mut model, name, &normalized_vendor);
     let reasoning_configuration_changed = model.configuration.only_reasoning
         != configuration.only_reasoning
         || model.configuration.reasoning != configuration.reasoning;
@@ -247,7 +319,7 @@ pub fn update_model(
         model.updated_at = Utc::now().to_rfc3339();
     }
     model.name = name.to_string();
-    model.vendor = vendor.to_ascii_lowercase();
+    model.vendor = normalized_vendor;
     if configuration_changed {
         let capability = if reasoning_configuration_changed {
             "reasoningConfiguration"
@@ -298,6 +370,7 @@ pub fn prepare_publish(
     request: PreparePublishRequest,
     state: State<'_, AppState>,
 ) -> CommandResult<PublishPreview> {
+    let _mutation = lock_app_mutation(state.inner())?;
     let settings = state
         .store
         .settings(default_target_paths().map_err(CommandError::from)?)
@@ -312,6 +385,7 @@ pub fn execute_publish(
     request: ExecutePublishRequest,
     state: State<'_, AppState>,
 ) -> CommandResult<PublishResult> {
+    let _mutation = lock_app_mutation(state.inner())?;
     let settings = state
         .store
         .settings(default_target_paths().map_err(CommandError::from)?)
@@ -331,6 +405,7 @@ pub fn list_backups(
 
 #[tauri::command]
 pub fn restore_backup(id: String, state: State<'_, AppState>) -> CommandResult<()> {
+    let _mutation = lock_app_mutation(state.inner())?;
     coordinator(state.inner())
         .restore(&id)
         .map_err(CommandError::from)
@@ -341,6 +416,7 @@ pub fn save_settings(
     input: SaveSettingsInput,
     state: State<'_, AppState>,
 ) -> CommandResult<AppSettings> {
+    let _mutation = lock_app_mutation(state.inner())?;
     if !matches!(input.language.as_str(), "zh-CN" | "en") {
         return Err(crate::error::CoreError::Validation(
             "Unsupported interface language".to_string(),
@@ -350,6 +426,7 @@ pub fn save_settings(
     if !matches!(input.theme.as_str(), "light" | "dark" | "system") {
         return Err(crate::error::CoreError::Validation("Unsupported theme".to_string()).into());
     }
+    validate_selected_targets(&input.selected_targets).map_err(CommandError::from)?;
     if input
         .target_paths
         .values()
@@ -360,10 +437,12 @@ pub fn save_settings(
         )
         .into());
     }
+    validate_target_paths(&input.target_paths).map_err(CommandError::from)?;
     let settings = AppSettings {
         language: input.language,
         theme: input.theme,
         selected_targets: input.selected_targets,
+        target_selection_initialized: input.target_selection_initialized,
         target_paths: input.target_paths,
     };
     state
@@ -381,6 +460,63 @@ fn coordinator(state: &AppState) -> PublishCoordinator<'_> {
     }
 }
 
+fn lock_app_mutation(state: &AppState) -> CommandResult<MutexGuard<'_, ()>> {
+    state.app_mutation.lock().map_err(|_| {
+        CommandError::from(crate::error::CoreError::Storage(
+            "Application mutation lock is unavailable".to_string(),
+        ))
+    })
+}
+
+fn ensure_gateway_snapshot_unchanged(
+    expected_profile: &GatewayProfile,
+    expected_token: &str,
+    current_profile: &GatewayProfile,
+    current_token: &str,
+) -> crate::error::CoreResult<()> {
+    if expected_profile != current_profile || expected_token != current_token {
+        return Err(crate::error::CoreError::Conflict(
+            "The API profile or credential changed while the request was running; reload and try again"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_model_id_available(
+    models: &[ManagedModel],
+    model_id: &str,
+) -> crate::error::CoreResult<()> {
+    if models.iter().any(|model| model.id == model_id) {
+        return Err(crate::error::CoreError::Validation(
+            "This model ID already exists in the selected API source".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_target_paths(
+    paths: &std::collections::HashMap<TargetKind, String>,
+) -> crate::error::CoreResult<()> {
+    let workbuddy_path = target_write_path(&target_path(TargetKind::Workbuddy, paths)?)?;
+    let codebuddy_path = target_write_path(&target_path(TargetKind::Codebuddy, paths)?)?;
+    if workbuddy_path == codebuddy_path {
+        return Err(crate::error::CoreError::Validation(
+            "WorkBuddy and CodeBuddy must use different configuration files".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_selected_targets(targets: &[TargetKind]) -> crate::error::CoreResult<()> {
+    if targets.iter().collect::<HashSet<_>>().len() != targets.len() {
+        return Err(crate::error::CoreError::Validation(
+            "A configuration target can only be selected once".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn normalize_model_configuration(
     mut configuration: ModelConfiguration,
     capabilities: &crate::models::CapabilitySet,
@@ -393,10 +529,22 @@ fn normalize_model_configuration(
         .transpose()?;
     if configuration
         .temperature
-        .is_some_and(|temperature| !temperature.is_finite())
+        .is_some_and(|temperature| !temperature.is_finite() || temperature < 0.0)
     {
         return Err(crate::error::CoreError::Validation(
-            "Temperature must be a finite number".to_string(),
+            "Temperature must be a finite non-negative number".to_string(),
+        ));
+    }
+    if [
+        configuration.max_input_tokens,
+        configuration.max_output_tokens,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value == 0 || value > crate::models::MAX_SAFE_INTEGER)
+    {
+        return Err(crate::error::CoreError::Validation(
+            "Token limits must be positive safe integers".to_string(),
         ));
     }
 
@@ -437,6 +585,28 @@ fn normalize_model_configuration(
     Ok(configuration)
 }
 
+fn record_identity_override(model: &mut ManagedModel, name: &str, vendor: &str) {
+    if model.name == name && model.vendor == vendor {
+        return;
+    }
+    if !model.metadata.is_object() {
+        model.metadata = json!({});
+    }
+    let mut identity_override = model
+        .metadata
+        .get("everybuddyIdentityOverride")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if model.name != name {
+        identity_override.insert("name".to_string(), json!(name));
+    }
+    if model.vendor != vendor {
+        identity_override.insert("vendor".to_string(), json!(vendor));
+    }
+    model.metadata["everybuddyIdentityOverride"] = Value::Object(identity_override);
+}
+
 fn build_manual_model(
     gateway_id: &str,
     id: &str,
@@ -444,19 +614,38 @@ fn build_manual_model(
     vendor: &str,
     market_model: Option<&MarketModel>,
 ) -> ManagedModel {
-    let fallback_vendor = if vendor.trim().is_empty() {
-        infer_vendor(id)
+    let explicit_name = name.trim();
+    let explicit_vendor = vendor.trim();
+    let vendor = if explicit_vendor.is_empty() {
+        market_model
+            .and_then(MarketModel::vendor)
+            .unwrap_or_else(|| infer_vendor(id))
     } else {
-        vendor.trim().to_ascii_lowercase()
+        explicit_vendor.to_ascii_lowercase()
     };
-    let vendor = market_model
-        .and_then(MarketModel::vendor)
-        .unwrap_or(fallback_vendor);
-    let metadata = json!({
+    let resolved_name = if explicit_name.is_empty() {
+        market_model
+            .and_then(MarketModel::display_name)
+            .unwrap_or(id)
+            .to_string()
+    } else {
+        explicit_name.to_string()
+    };
+    let mut metadata = json!({
         "id": id,
         "owned_by": vendor,
         "everybuddySource": "manual"
     });
+    let mut identity_override = serde_json::Map::new();
+    if !explicit_name.is_empty() {
+        identity_override.insert("name".to_string(), json!(resolved_name.clone()));
+    }
+    if !explicit_vendor.is_empty() {
+        identity_override.insert("vendor".to_string(), json!(vendor.clone()));
+    }
+    if !identity_override.is_empty() {
+        metadata["everybuddyIdentityOverride"] = Value::Object(identity_override);
+    }
     let (capabilities, evidence) =
         CapabilityResolver::resolve_with_market(id, &metadata, market_model, &[]);
     let configuration = configuration_from_sources(id, &metadata, market_model, &capabilities);
@@ -465,14 +654,7 @@ fn build_manual_model(
         key: format!("{gateway_id}::{id}"),
         gateway_id: gateway_id.to_string(),
         id: id.to_string(),
-        name: if name.trim().is_empty() {
-            market_model
-                .and_then(MarketModel::display_name)
-                .unwrap_or(id)
-                .to_string()
-        } else {
-            name.trim().to_string()
-        },
+        name: resolved_name,
         vendor,
         capabilities,
         configuration,
@@ -531,6 +713,10 @@ mod tests {
         assert!(model.capabilities.supports_reasoning);
         assert!(model.capabilities.reasoning_efforts.is_empty());
         assert_eq!(model.metadata["everybuddySource"], "manual");
+        assert_eq!(
+            model.metadata["everybuddyIdentityOverride"],
+            json!({"name": "Private GPT"})
+        );
     }
 
     #[test]
@@ -598,6 +784,114 @@ mod tests {
         };
 
         assert!(normalize_model_configuration(configuration, &capabilities).is_err());
+    }
+
+    #[test]
+    fn rejects_non_positive_token_limits_and_negative_temperature() {
+        let configurations = [
+            ModelConfiguration {
+                max_input_tokens: Some(0),
+                ..Default::default()
+            },
+            ModelConfiguration {
+                max_output_tokens: Some(0),
+                ..Default::default()
+            },
+            ModelConfiguration {
+                temperature: Some(-0.1),
+                ..Default::default()
+            },
+            ModelConfiguration {
+                max_input_tokens: Some(9_007_199_254_740_992),
+                ..Default::default()
+            },
+        ];
+
+        for configuration in configurations {
+            assert!(normalize_model_configuration(
+                configuration,
+                &crate::models::CapabilitySet::default()
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn records_manual_identity_overrides_for_future_refreshes() {
+        let mut model = build_manual_model("gateway", "model", "Original", "custom", None);
+
+        record_identity_override(&mut model, "Renamed", "private");
+
+        assert_eq!(
+            model.metadata["everybuddyIdentityOverride"],
+            json!({"name": "Renamed", "vendor": "private"})
+        );
+    }
+
+    #[test]
+    fn records_only_the_identity_field_that_changed() {
+        let mut model = build_manual_model("gateway", "model", "Original", "custom", None);
+        model
+            .metadata
+            .as_object_mut()
+            .unwrap()
+            .remove("everybuddyIdentityOverride");
+
+        record_identity_override(&mut model, "Renamed", "custom");
+
+        assert_eq!(
+            model.metadata["everybuddyIdentityOverride"],
+            json!({"name": "Renamed"})
+        );
+    }
+
+    #[test]
+    fn rejects_targets_that_resolve_to_the_same_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("models.json");
+        let paths = std::collections::HashMap::from([
+            (TargetKind::Workbuddy, path.to_string_lossy().to_string()),
+            (TargetKind::Codebuddy, path.to_string_lossy().to_string()),
+        ]);
+
+        assert!(validate_target_paths(&paths).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_target_preferences() {
+        assert!(
+            validate_selected_targets(&[TargetKind::Workbuddy, TargetKind::Workbuddy,]).is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_changed_gateway_snapshot_after_a_remote_request() {
+        let expected = GatewayProfile {
+            id: "gateway".to_string(),
+            name: "Gateway".to_string(),
+            api_root: "https://api.example.com/v1".to_string(),
+            token_ref: "gateway".to_string(),
+            created_at: "2026-08-20T00:00:00Z".to_string(),
+            updated_at: "2026-08-20T00:00:00Z".to_string(),
+        };
+        let mut changed = expected.clone();
+        changed.updated_at = "2026-08-21T00:00:00Z".to_string();
+
+        assert!(
+            ensure_gateway_snapshot_unchanged(&expected, "old-token", &changed, "old-token")
+                .is_err()
+        );
+        assert!(
+            ensure_gateway_snapshot_unchanged(&expected, "old-token", &expected, "new-token")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_a_model_id_added_while_market_lookup_is_running() {
+        let existing = build_manual_model("gateway", "duplicate", "Duplicate", "custom", None);
+
+        assert!(ensure_model_id_available(&[existing], "duplicate").is_err());
     }
 
     #[test]

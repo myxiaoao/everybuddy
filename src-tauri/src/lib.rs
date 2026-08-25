@@ -11,7 +11,10 @@ mod store;
 mod target;
 mod target_import;
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use gateway::GatewayClient;
 use secrets::{SecretStore, SystemSecretStore};
@@ -24,11 +27,18 @@ pub struct AppState {
     secrets: Arc<dyn SecretStore>,
     gateway_client: GatewayClient,
     backup_root: PathBuf,
+    app_mutation: Mutex<()>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Warn)
@@ -54,6 +64,7 @@ pub fn run() {
                 secrets: Arc::new(SystemSecretStore),
                 gateway_client,
                 backup_root: data_dir.join("backups"),
+                app_mutation: Mutex::new(()),
             });
             Ok(())
         })
@@ -108,6 +119,7 @@ mod tests {
                 language: "zh-CN".to_string(),
                 theme: "system".to_string(),
                 selected_targets: Vec::new(),
+                target_selection_initialized: false,
                 target_paths: [
                     (
                         TargetKind::Workbuddy,

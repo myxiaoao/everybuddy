@@ -113,12 +113,16 @@ impl GatewayClient {
                 let market_model = market_catalog
                     .as_deref()
                     .and_then(|catalog| catalog.find(id, &inferred_vendor));
-                let name = gateway_name
+                let discovered_name = gateway_name
                     .or_else(|| market_model.and_then(MarketModel::display_name))
                     .unwrap_or(id);
-                let vendor = market_model
+                let discovered_vendor = market_model
                     .and_then(MarketModel::vendor)
                     .unwrap_or(inferred_vendor);
+                let identity_override = existing_model
+                    .and_then(|model| model.metadata.get("everybuddyIdentityOverride"));
+                let (name, vendor) =
+                    resolved_identity(identity_override, discovered_name, discovered_vendor);
                 let (capabilities, evidence) = CapabilityResolver::resolve_with_market(
                     id,
                     item,
@@ -136,6 +140,14 @@ impl GatewayClient {
                         object.insert("everybuddySource".to_string(), json!(source));
                     }
                 }
+                if let Some(identity_override) = identity_override {
+                    if let Some(object) = metadata.as_object_mut() {
+                        object.insert(
+                            "everybuddyIdentityOverride".to_string(),
+                            identity_override.clone(),
+                        );
+                    }
+                }
                 if let (Some(object), Some(market_model)) = (metadata.as_object_mut(), market_model)
                 {
                     object.insert(
@@ -151,7 +163,7 @@ impl GatewayClient {
                     key,
                     gateway_id: profile.id.clone(),
                     id: id.to_string(),
-                    name: name.to_string(),
+                    name,
                     vendor,
                     capabilities,
                     configuration,
@@ -305,6 +317,24 @@ impl GatewayClient {
         serde_json::from_slice(&bytes)
             .map_err(|_| CoreError::Protocol("Response is not valid JSON".to_string()))
     }
+}
+
+fn resolved_identity(
+    identity_override: Option<&Value>,
+    discovered_name: &str,
+    discovered_vendor: String,
+) -> (String, String) {
+    let name = identity_override
+        .and_then(|value| value.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or(discovered_name)
+        .to_string();
+    let vendor = identity_override
+        .and_then(|value| value.get("vendor"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .unwrap_or(discovered_vendor);
+    (name, vendor)
 }
 
 fn should_preserve_configuration(model: &ManagedModel) -> bool {
@@ -471,17 +501,39 @@ pub fn value_contains_secret(value: &Value, secret: &str) -> bool {
         return false;
     }
     match value {
-        Value::Object(object) => object
-            .values()
-            .any(|value| value_contains_secret(value, secret)),
+        Value::Object(object) => object.iter().any(|(key, value)| {
+            (!is_structural_response_key(key) && string_contains_secret(key, secret))
+                || value_contains_secret(value, secret)
+        }),
         Value::Array(items) => items.iter().any(|item| value_contains_secret(item, secret)),
         Value::String(value) => string_contains_secret(value, secret),
         _ => false,
     }
 }
 
+fn is_structural_response_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "data" | "id" | "object" | "name" | "display_name" | "owned_by" | "created"
+    )
+}
+
 fn string_contains_secret(value: &str, secret: &str) -> bool {
-    value.contains(secret)
+    if value == secret || secret.len() >= 12 && value.contains(secret) {
+        return true;
+    }
+
+    value.match_indices(secret).any(|(start, _)| {
+        let before = value[..start].chars().next_back();
+        let after = value[start + secret.len()..].chars().next();
+        before.is_none_or(|character| !is_credential_character(character))
+            && after.is_none_or(|character| !is_credential_character(character))
+    })
+}
+
+fn is_credential_character(character: char) -> bool {
+    character.is_ascii_alphanumeric()
+        || matches!(character, '.' | '_' | '~' | '+' | '/' | '-' | '=')
 }
 
 fn is_secret_key(key: &str) -> bool {
@@ -587,6 +639,22 @@ mod tests {
         assert!(value_contains_secret(&json!({"value": "x"}), "x"));
         assert!(value_contains_secret(&json!({"note": "Bearer abc"}), "abc"));
         assert!(!value_contains_secret(&json!({"id": "safe-model"}), "id"));
+    }
+
+    #[test]
+    fn detects_credentials_in_json_keys_without_short_substring_false_positives() {
+        assert!(value_contains_secret(
+            &json!({"target-secret-value": true}),
+            "target-secret-value"
+        ));
+        assert!(value_contains_secret(&json!({"note": "Bearer pro"}), "pro"));
+        assert!(value_contains_secret(&json!({"note": "pro"}), "pro"));
+        assert!(!value_contains_secret(
+            &json!({"note": "provider unavailable"}),
+            "pro"
+        ));
+        assert!(value_contains_secret(&json!({"sk": true}), "sk"));
+        assert!(!value_contains_secret(&json!({"data": []}), "data"));
     }
 
     #[test]
@@ -794,6 +862,22 @@ mod tests {
             &capabilities,
         );
         assert_eq!(imported, automatic.configuration);
+    }
+
+    #[test]
+    fn refresh_preserves_manual_model_identity() {
+        let identity_override = json!({
+            "name": "Private GPT",
+            "vendor": "private"
+        });
+
+        let identity = resolved_identity(
+            Some(&identity_override),
+            "Gateway GPT",
+            "openai".to_string(),
+        );
+
+        assert_eq!(identity, ("Private GPT".to_string(), "private".to_string()));
     }
 
     #[test]

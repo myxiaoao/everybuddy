@@ -25,7 +25,8 @@ interface GatewaySidebarProps {
   currentVersion: string;
   gateways: GatewayProfile[];
   selectedId: string | null;
-  busyId: string | null;
+  disabled: boolean;
+  refreshingIds: ReadonlySet<string>;
   connectionStates: Record<string, GatewayConnectionState>;
   t: ReturnType<typeof createTranslator>;
   onSelect: (id: string) => void;
@@ -41,7 +42,8 @@ export function GatewaySidebar({
   currentVersion,
   gateways,
   selectedId,
-  busyId,
+  disabled,
+  refreshingIds,
   connectionStates,
   t,
   onSelect,
@@ -52,7 +54,6 @@ export function GatewaySidebar({
   onOpenSettings,
   onOpenBackups,
 }: GatewaySidebarProps) {
-  const refreshing = busyId !== null;
   return (
     <aside className="gateway-panel" aria-label={t("gateways")}>
       <div className="brand-lockup">
@@ -81,7 +82,7 @@ export function GatewaySidebar({
               type="button"
               onClick={onAdd}
               aria-label={t("addGateway")}
-              disabled={refreshing}
+              disabled={disabled}
             >
               <Plus aria-hidden="true" size={18} />
             </Button>
@@ -93,7 +94,7 @@ export function GatewaySidebar({
       <div className="gateway-list">
         {gateways.map((gateway) => {
           const selected = gateway.id === selectedId;
-          const busy = gateway.id === busyId;
+          const busy = refreshingIds.has(gateway.id);
           const connectionState = busy
             ? "refreshing"
             : (connectionStates[gateway.id] ?? "idle");
@@ -109,6 +110,7 @@ export function GatewaySidebar({
                     className="gateway-item__main"
                     type="button"
                     onClick={() => onSelect(gateway.id)}
+                    disabled={disabled}
                     aria-current={selected ? "true" : undefined}
                     aria-label={`${gateway.name}, ${gateway.apiRoot}, ${connectionLabel}`}
                   >
@@ -137,7 +139,7 @@ export function GatewaySidebar({
                         type="button"
                         onClick={() => onRefresh(gateway.id)}
                         aria-label={t("refreshModels")}
-                        disabled={refreshing}
+                        disabled={disabled || busy}
                       >
                         <RefreshCw
                           aria-hidden="true"
@@ -156,7 +158,7 @@ export function GatewaySidebar({
                         type="button"
                         onClick={() => onEdit(gateway)}
                         aria-label={t("editGateway")}
-                        disabled={refreshing}
+                        disabled={disabled || busy}
                       >
                         <Pencil aria-hidden="true" size={15} />
                       </Button>
@@ -171,7 +173,7 @@ export function GatewaySidebar({
                         type="button"
                         onClick={() => onDelete(gateway)}
                         aria-label={t("remove")}
-                        disabled={refreshing}
+                        disabled={disabled || busy}
                       >
                         <Trash2 aria-hidden="true" size={15} />
                       </Button>
@@ -191,6 +193,7 @@ export function GatewaySidebar({
           variant="secondary"
           type="button"
           onClick={onOpenBackups}
+          disabled={disabled}
         >
           <ArchiveRestore aria-hidden="true" size={17} />
           {t("backups")}
@@ -200,6 +203,7 @@ export function GatewaySidebar({
           variant="secondary"
           type="button"
           onClick={onOpenSettings}
+          disabled={disabled}
         >
           <Settings aria-hidden="true" size={17} />
           {t("settings")}

@@ -12,6 +12,7 @@
     "language": "zh-CN",
     "theme": "system",
     "selectedTargets": [],
+    "targetSelectionInitialized": false,
     "targetPaths": {
       "workbuddy": "/home/test/.workbuddy/models.json",
       "codebuddy": "/home/test/.codebuddy/models.json"

@@ -24,6 +24,7 @@ import type {
   TargetStatus,
 } from "../types";
 import type { createTranslator } from "../lib/i18n";
+import { isValidModelConfiguration } from "../lib/model-configuration";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -79,7 +80,12 @@ export function InspectorPanel({
       ),
     [capabilities, configuration, model, name, vendor],
   );
-  const valid = Boolean(name.trim() && vendor.trim());
+  const valid = Boolean(
+    name.trim() &&
+    vendor.trim() &&
+    configuration &&
+    isValidModelConfiguration(configuration),
+  );
 
   useEffect(() => {
     onDirtyChange(model?.key ?? null, changed);
@@ -450,7 +456,15 @@ function NumberField({
         value={value ?? ""}
         onChange={(event) => {
           const next = event.target.value;
-          onChange(next === "" ? null : Number(next));
+          if (next === "") {
+            onChange(null);
+            return;
+          }
+          const parsed = Number(next);
+          const valid = integer
+            ? Number.isSafeInteger(parsed) && parsed > 0
+            : Number.isFinite(parsed) && parsed >= 0;
+          if (valid) onChange(parsed);
         }}
       />
     </ConfigField>

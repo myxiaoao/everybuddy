@@ -154,7 +154,7 @@ export function CommandBar({
               className="command-primary"
               type="button"
               onClick={onPublish}
-              disabled={busy || !canPublish}
+              disabled={busy || refreshing || !canPublish}
             >
               <Upload aria-hidden="true" size={16} />
               <span className="command-primary__label">{t("publish")}</span>
