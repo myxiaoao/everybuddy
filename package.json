@@ -19,7 +19,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "pnpm typecheck && vite build",
+    "build": "pnpm typecheck && pnpm build:frontend",
+    "build:frontend": "vite build",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "ipc:check": "node scripts/check-ipc-contract.mjs",
@@ -29,6 +30,9 @@
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "release:check": "node scripts/check-release-version.mjs",
+    "verify": "pnpm verify:frontend && pnpm verify:rust",
+    "verify:frontend": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm ipc:check && pnpm test:coverage && pnpm build:frontend && pnpm release:check",
+    "verify:rust": "cargo fmt --check --manifest-path src-tauri/Cargo.toml && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml",
     "preview": "vite preview",
     "tauri": "tauri"
   },

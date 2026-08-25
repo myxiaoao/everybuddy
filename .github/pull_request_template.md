@@ -4,13 +4,8 @@
 
 ## 验证
 
-- [ ] `pnpm format:check`
-- [ ] `pnpm lint`
-- [ ] `pnpm typecheck`
-- [ ] `pnpm ipc:check`
-- [ ] `pnpm test`
-- [ ] `pnpm test:coverage`
-- [ ] Rust `fmt`、`clippy` 和 `test`（涉及 Rust 时）
+- [ ] `pnpm verify:frontend`
+- [ ] `pnpm verify:rust`（涉及 Rust 时）
 - [ ] `pnpm tauri build`（涉及打包、权限或平台行为时）
 
 ## 安全与兼容性

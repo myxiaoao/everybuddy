@@ -36,7 +36,7 @@ WorkBuddy 和 CodeBuddy 的 `models.json` 协议要求包含明文 `apiKey`。�
 - macOS 12 或更高版本，发布包同时支持 Apple Silicon 和 Intel。
 - Windows 10 或更高版本，首版发布 x64 安装包。
 
-Alpha 安装包由 [GitHub Releases](https://github.com/myxiaoao/everybuddy/releases) 提供。当前安装包没有 Apple Developer ID 或 Windows Authenticode 平台签名，因此 macOS Gatekeeper 和 Windows SmartScreen 会显示未验证开发者警告。
+首个 Alpha 安装包将由 [GitHub Releases](https://github.com/myxiaoao/everybuddy/releases) 提供。当前安装包没有 Apple Developer ID 或 Windows Authenticode 平台签名，因此 macOS Gatekeeper 和 Windows SmartScreen 会显示未验证开发者警告。
 
 只从本仓库下载，并使用 Release 中的 `SHA256SUMS.txt` 校验文件。macOS 用户需要在 Finder 中对应用选择「打开」，或在「系统设置 → 隐私与安全性」中确认打开；Windows 用户需要在 SmartScreen 中选择「更多信息 → 仍要运行」。
 
@@ -69,17 +69,7 @@ pnpm dev
 ## 验证
 
 ```bash
-pnpm format:check
-pnpm lint
-pnpm typecheck
-pnpm ipc:check
-pnpm test
-pnpm test:coverage
-pnpm build
-pnpm release:check
-cargo fmt --check --manifest-path src-tauri/Cargo.toml
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
-cargo test --manifest-path src-tauri/Cargo.toml
+pnpm verify
 pnpm tauri build
 ```
 

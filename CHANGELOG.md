@@ -4,8 +4,6 @@
 
 ## [Unreleased]
 
-## [0.1.0-alpha.1] - 2026-08-23
-
 ### Added
 
 - 管理多个 OpenAI-compatible API 来源和本机系统凭据。
@@ -15,5 +13,4 @@
 - 简体中文、English，以及 Light、Dark、System 主题。
 - macOS Universal、Windows x64、Tauri Updater 签名和 Unsigned Alpha 发布工作流。
 
-[Unreleased]: https://github.com/myxiaoao/everybuddy/compare/v0.1.0-alpha.1...HEAD
-[0.1.0-alpha.1]: https://github.com/myxiaoao/everybuddy/releases/tag/v0.1.0-alpha.1
+[Unreleased]: https://github.com/myxiaoao/everybuddy/commits/main
