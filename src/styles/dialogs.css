@@ -578,7 +578,7 @@
   gap: var(--space-2);
   width: 100%;
   max-height: min(240px, 40vh);
-  padding: 10px;
+  padding: 10px var(--space-4);
   overflow: auto;
   color: var(--color-text-primary);
   background: var(--color-bg-surface);

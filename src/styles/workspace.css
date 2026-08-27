@@ -820,7 +820,7 @@ input[type="checkbox"] {
   overflow: hidden;
   color: inherit;
   background: transparent;
-  border-radius: var(--radius-xs);
+  border-radius: 50%;
 }
 
 .target-option__icon img {
@@ -830,9 +830,8 @@ input[type="checkbox"] {
   object-fit: contain;
 }
 
-.target-option__icon[data-target-kind="codebuddy"] img {
-  width: 81.25%;
-  height: 81.25%;
+.target-option__icon[data-target-kind="workbuddy"] img {
+  transform: scale(1.23);
 }
 
 .target-option__copy {
