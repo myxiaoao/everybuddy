@@ -1,10 +1,78 @@
+<div align="center">
+
+<img src="public/everybuddy-icon.png" alt="EveryBuddy Logo" width="128" />
+
 # EveryBuddy
+
+[![React](https://img.shields.io/badge/React-19.1%2B-61DAFB.svg?logo=react&logoColor=black)](https://react.dev/) [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6.svg?logo=typescript&logoColor=white)](https://www.typescriptlang.org/) [![Rust](https://img.shields.io/badge/Rust-1.91.1-000000.svg?logo=rust&logoColor=white)](https://www.rust-lang.org/) [![Tauri](https://img.shields.io/badge/Tauri-2-FFC131.svg?logo=tauri&logoColor=black)](https://tauri.app/) [![License](https://img.shields.io/badge/License-MIT-2EA44F.svg)](LICENSE)
+
+**面向 WorkBuddy 与 CodeBuddy 的 OpenAI-compatible 模型配置管理桌面应用**
+
+</div>
 
 EveryBuddy 是一款面向个人开发者的开源桌面应用，用于管理多个 OpenAI-compatible API 来源，并把选中的模型配置发布到 WorkBuddy、CodeBuddy 或同时发布到两个产品。
 
 > 当前开发版本为 `0.1.0-alpha.1`。发布操作会备份并校验目标配置，但仍建议把现有 `models.json` 纳入本机备份。
 
 ![EveryBuddy 工作区](docs/assets/everybuddy-workspace.png)
+
+## 核心流程
+
+```mermaid
+flowchart TD
+    Start([启动 EveryBuddy]) --> Read[读取 WorkBuddy 和 CodeBuddy<br/>现有 models.json]
+    Read --> Existing{发现既有配置？}
+    Existing -->|是| Import[导入 API、模型、发布选择状态<br/>以及已有 Target Evidence]
+    Existing -->|否| Add[添加 API 来源<br/>Base URL 和 Token]
+    Add --> Discover[通过 GET /v1/models 发现模型]
+
+    subgraph Normalize[能力归一化]
+        direction TD
+        Collect[收集当前模型的全部 Evidence]
+        Gateway[解析 Gateway metadata<br/>Capability、Modality、Parameter、Reasoning]
+        OpenRouter[首次发现或手动添加时按需查询<br/>按 Model ID 精确匹配 OpenRouter<br/>仅补齐 Gateway 缺失字段]
+        Imported[读取 Target 导入值<br/>保留已有能力与模型配置]
+        Probe[主动 Probe（可选）<br/>仅标准 Chat Completions<br/>最多 3 个请求，只记录可验证结果]
+        Manual[人工调整（可选）<br/>按单项能力写入 Manual Evidence]
+        Default[缺少证据时使用保守默认值<br/>Tool Call、Vision、Reasoning 均为 false]
+
+        Collect --> Gateway
+        Collect --> OpenRouter
+        Collect --> Imported
+        Collect -. 用户确认 .-> Probe
+        Collect -. 用户保存 .-> Manual
+        Collect --> Default
+
+        Gateway --> Gather[汇总 Capability Evidence]
+        OpenRouter --> Gather
+        Imported --> Gather
+        Probe --> Gather
+        Manual --> Gather
+        Default --> Gather
+
+        Gather --> NonText{当前有效来源明确为<br/>非 text-output？}
+        NonText -->|是| Block[强制关闭聊天能力<br/>不生成聊天调用参数]
+        NonText -->|否| Resolve[按单项能力选择最高优先级 Evidence<br/>Manual → Probe → Imported<br/>Gateway metadata → OpenRouter → Default]
+        Resolve --> Capability[生成标准能力集<br/>Tool Call、Vision、Reasoning、Reasoning Effort]
+        Capability --> Project[生成模型调用配置<br/>保留 Target 导入与人工配置<br/>Gateway 优先，OpenRouter 补缺]
+        Project --> Validate[校验 Token 上限、Temperature 和 Reasoning<br/>移除不支持或不安全的值]
+        Block --> Result[输出标准化能力、配置和 Evidence]
+        Validate --> Result
+    end
+
+    Import --> Collect
+    Discover --> Collect
+    Result --> Select[选择模型和发布目标]
+    Select --> Preview[逐目标预览配置差异]
+    Preview --> Backup[备份目标配置]
+    Backup --> Publish[写入 WorkBuddy 和 CodeBuddy]
+    Publish --> Verify{写入校验}
+    Verify -->|全部成功| Done([配置生效])
+    Verify -->|部分失败| Rollback[补偿回滚已写入的目标]
+    Rollback --> Report([报告各目标结果])
+```
+
+主动 Probe 和人工调整都会新增独立的 Capability Evidence，并重新执行能力归一化。它们的优先级高于自动来源，但不能绕过非 text-output 硬约束。
 
 ## 工作方式
 
@@ -26,6 +94,12 @@ EveryBuddy 启动时会读取两个目标已有的 `models.json`。API 来源不
 - 发布前预览新增和更新内容，保留未知字段，并检测外部配置变化。
 - 为每个目标保留最近 10 份备份，支持查看和恢复。
 - 支持简体中文、English，以及 Light、Dark、System 主题。
+
+## 发布前预览
+
+发布前会逐目标展示新增、更新和不变的模型数量。存在 Model ID 冲突时，需要明确确认是否使用当前 API 来源替换目标中的同名模型。
+
+![EveryBuddy 发布前预览](docs/assets/everybuddy-publish-preview.png)
 
 ## API 兼容要求
 
