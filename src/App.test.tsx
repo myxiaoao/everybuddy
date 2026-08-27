@@ -370,6 +370,36 @@ describe("EveryBuddy workspace", () => {
     expect(alert).toHaveTextContent("当前 API 来源中已有相同的 Model ID");
     expect(alert).toHaveTextContent("使用其他 Model ID，或编辑已有模型");
     expect(screen.getByRole("status")).not.toHaveTextContent("模型已存在");
+
+    expect(dialog).toContainElement(alert);
+    fireEvent.click(within(alert).getByRole("button", { name: "关闭" }));
+    expect(dialog).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("textbox", { name: /Model ID/ }),
+    ).toHaveValue("gpt-5.6");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("retranslates the startup announcement after changing language", async () => {
+    vi.spyOn(api, "saveSettings").mockImplementation(
+      async (settings) => settings,
+    );
+    render(<App />);
+
+    await screen.findAllByText("GPT-5.6");
+    const liveRegion = document.querySelector(".live-region");
+    expect(liveRegion).toHaveTextContent("发现 1 个需要关注的配置项");
+
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    fireEvent.click(within(dialog).getByRole("radio", { name: "English" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() =>
+      expect(liveRegion).toHaveTextContent(
+        "Startup configuration recovery completed: imported 1 API and 2 models, with 1 configuration item needing attention.",
+      ),
+    );
   });
 
   it("uses app dialogs for destructive confirmations", async () => {

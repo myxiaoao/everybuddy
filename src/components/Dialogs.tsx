@@ -31,11 +31,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { TargetIcon } from "./TargetIcon";
 import type { UpdateCheckStatus } from "../hooks/use-app-updater";
+import type { ErrorNoticeContent } from "./ErrorNotice";
 
 interface CommonDialogProps {
   open: boolean;
   busy: boolean;
   t: ReturnType<typeof createTranslator>;
+  errorNotice?: ErrorNoticeContent;
   onClose: () => void;
 }
 
@@ -47,6 +49,7 @@ export function ConfirmationDialog({
   confirmLabel,
   destructive = false,
   t,
+  errorNotice,
   onClose,
   onConfirm,
 }: CommonDialogProps & {
@@ -62,6 +65,7 @@ export function ConfirmationDialog({
       title={title}
       description={description}
       closeLabel={t("close")}
+      errorNotice={errorNotice}
       onClose={onClose}
       size="small"
       footer={
@@ -105,6 +109,7 @@ export function ManualModelDialog({
   busy,
   gateway,
   t,
+  errorNotice,
   onClose,
   onSubmit,
 }: CommonDialogProps & {
@@ -112,6 +117,7 @@ export function ManualModelDialog({
   onSubmit: (input: ManualModelInput) => void;
 }) {
   const formId = useId();
+  const vendorHintId = useId();
   const [id, setId] = useState("");
   const [name, setName] = useState("");
   const [vendor, setVendor] = useState("");
@@ -127,6 +133,7 @@ export function ManualModelDialog({
       title={t("addManualModel")}
       description={t("manualModelDescription", { gateway: gateway.name })}
       closeLabel={t("close")}
+      errorNotice={errorNotice}
       onClose={onClose}
       footer={
         <>
@@ -174,10 +181,12 @@ export function ManualModelDialog({
             value={vendor}
             onChange={(event) => setVendor(event.currentTarget.value)}
             placeholder={t("manualModelVendorPlaceholder")}
+            aria-describedby={vendorHintId}
             autoComplete="off"
             spellCheck="false"
             autoCapitalize="none"
           />
+          <small id={vendorHintId}>{t("manualModelVendorHint")}</small>
         </label>
       </form>
     </Modal>
@@ -190,6 +199,7 @@ export function GatewayDialog({
   gateway,
   initialToken,
   t,
+  errorNotice,
   onClose,
   onSubmit,
 }: CommonDialogProps & {
@@ -214,6 +224,7 @@ export function GatewayDialog({
       open={open}
       title={gateway ? t("editGateway") : t("addGateway")}
       closeLabel={t("close")}
+      errorNotice={errorNotice}
       onClose={onClose}
       footer={
         <>
@@ -295,6 +306,7 @@ export function ProbeDialog({
   open,
   busy,
   t,
+  errorNotice,
   onClose,
   onConfirm,
 }: CommonDialogProps & { onConfirm: () => void }) {
@@ -304,6 +316,7 @@ export function ProbeDialog({
       title={t("probeTitle")}
       description={t("probeBody")}
       closeLabel={t("close")}
+      errorNotice={errorNotice}
       onClose={onClose}
       size="small"
       footer={
@@ -339,6 +352,7 @@ export function PublishDialog({
   preview,
   result,
   t,
+  errorNotice,
   onClose,
   onConfirm,
 }: CommonDialogProps & {
@@ -362,6 +376,7 @@ export function PublishDialog({
           : t("publishTitle")
       }
       closeLabel={t("close")}
+      errorNotice={errorNotice}
       onClose={onClose}
       size="large"
       footer={
@@ -475,6 +490,7 @@ export function SettingsDialog({
   updateCheckStatus,
   installingUpdate,
   t,
+  errorNotice,
   onClose,
   onSubmit,
   onCheckForUpdates,
@@ -497,6 +513,7 @@ export function SettingsDialog({
       open={open}
       title={t("settings")}
       closeLabel={t("close")}
+      errorNotice={errorNotice}
       onClose={onClose}
       footer={
         <>
@@ -671,6 +688,7 @@ export function BackupsDialog({
   backups,
   locale,
   t,
+  errorNotice,
   onClose,
   onRestore,
 }: CommonDialogProps & {
@@ -683,6 +701,7 @@ export function BackupsDialog({
       open={open}
       title={t("backups")}
       closeLabel={t("close")}
+      errorNotice={errorNotice}
       onClose={onClose}
       size="large"
       footer={

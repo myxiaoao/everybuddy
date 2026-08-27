@@ -30,11 +30,14 @@ const messages = {
       "添加到 {gateway}。保存时只查询 OpenRouter 公共模型目录，不调用模型，也不会产生 Token 费用。",
     addModel: "添加模型",
     manualModelId: "Model ID",
-    manualModelIdHint: "必须与 /chat/completions 请求中的 model 值完全一致。",
+    manualModelIdHint:
+      "填写协议实际使用的 model 值；标准 OpenAI-compatible 接口中，对应 /chat/completions 请求的 model 字段。",
     manualModelName: "显示名称（可选）",
     manualModelNamePlaceholder: "默认使用 Model ID",
     manualModelVendor: "提供商（可选）",
-    manualModelVendorPlaceholder: "由 OpenRouter 识别，未知时使用 custom",
+    manualModelVendorPlaceholder: "custom",
+    manualModelVendorHint:
+      "留空时使用 OpenRouter 匹配的提供商；无法识别时默认为 custom。",
     manualModelBadge: "手动",
     importedModelBadge: "已导入",
     manualModelAdded: "已添加模型 {name}",
@@ -310,12 +313,14 @@ const messages = {
       "Add this model to {gateway}. Saving only checks OpenRouter's public model catalog; it does not call the model or consume tokens.",
     addModel: "Add model",
     manualModelId: "Model ID",
-    manualModelIdHint: "Enter the exact model value used by /chat/completions.",
+    manualModelIdHint:
+      "Enter the model value used by the protocol. For standard OpenAI-compatible endpoints, this is the model field in the /chat/completions request.",
     manualModelName: "Display name (optional)",
     manualModelNamePlaceholder: "Defaults to the Model ID",
     manualModelVendor: "Vendor (optional)",
-    manualModelVendorPlaceholder:
-      "Resolved by OpenRouter, or custom when unknown",
+    manualModelVendorPlaceholder: "custom",
+    manualModelVendorHint:
+      "Leave blank to use the vendor matched by OpenRouter; unknown vendors default to custom.",
     manualModelBadge: "Manual",
     importedModelBadge: "Imported",
     manualModelAdded: "Added model {name}",
@@ -412,7 +417,7 @@ const messages = {
     summary_detailed: "Detailed",
     saveModelConfig: "Save model configuration",
     modelConfigSaved: "Model configuration saved",
-    probe: "Active probe",
+    probe: "Run probe",
     probeTitle: "Run capability probe",
     probeUnavailableCustomProtocol:
       "Active probing is unavailable for custom protocol endpoints",
@@ -610,8 +615,45 @@ const messages = {
 
 export type MessageKey = keyof (typeof messages)["zh-CN"];
 
+type MessageValues = Record<string, string | number>;
+
+function countPhrase(
+  values: MessageValues,
+  name: string,
+  singular: string,
+  plural: string,
+) {
+  const value = values[name] ?? 0;
+  return `${value} ${Number(value) === 1 ? singular : plural}`;
+}
+
+const englishCountMessages: Partial<
+  Record<MessageKey, (values: MessageValues) => string>
+> = {
+  selectedTargetsCount: (values) =>
+    `${countPhrase(values, "count", "target", "targets")} selected`,
+  publishScope: (values) =>
+    `${countPhrase(values, "models", "model", "models")} → ${countPhrase(values, "targets", "target", "targets")}`,
+  confirmPublish: (values) =>
+    `Publish to ${countPhrase(values, "count", "target", "targets")}`,
+  importSucceeded: (values) =>
+    `Imported ${countPhrase(values, "gateways", "API", "APIs")} and ${countPhrase(values, "models", "model", "models")} from target configuration.`,
+  importAnnouncement: (values) =>
+    `Startup configuration recovery completed: imported ${countPhrase(values, "gateways", "API", "APIs")} and ${countPhrase(values, "models", "model", "models")}, with ${countPhrase(values, "issues", "configuration item", "configuration items")} needing attention.`,
+  importNoticeSummary: (values) => {
+    const count = values.count ?? 0;
+    return Number(count) === 1
+      ? "1 configuration item was skipped or differs between targets."
+      : `${count} configuration items were skipped or differ between targets.`;
+  },
+};
+
 export function createTranslator(language: Language) {
-  return (key: MessageKey, values?: Record<string, string | number>) => {
+  return (key: MessageKey, values?: MessageValues) => {
+    const countMessage =
+      language === "en" ? englishCountMessages[key] : undefined;
+    if (countMessage) return countMessage(values ?? {});
+
     let message: string = messages[language][key];
     for (const [name, value] of Object.entries(values ?? {})) {
       message = message.replace(`{${name}}`, String(value));
