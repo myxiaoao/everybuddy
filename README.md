@@ -12,7 +12,7 @@
 
 EveryBuddy 是一款面向个人开发者的开源桌面应用，用于管理多个 OpenAI-compatible API 来源，并把选中的模型配置发布到 WorkBuddy、CodeBuddy 或同时发布到两个产品。
 
-> 当前开发版本为 `0.1.0-alpha.1`。发布操作会备份并校验目标配置，但仍建议把现有 `models.json` 纳入本机备份。
+> 当前稳定版本为 `0.1.0`。发布操作会备份并校验目标配置，但仍建议把现有 `models.json` 纳入本机备份。
 
 ![EveryBuddy 工作区](docs/assets/everybuddy-workspace.png)
 
@@ -82,7 +82,7 @@ flowchart TD
 4. 选择 WorkBuddy、CodeBuddy 或两个目标，预览差异后发布。
 5. 发布前自动备份目标配置。双目标发布发生部分失败时，EveryBuddy 会恢复已经写入的目标，并报告每个目标的结果。
 
-EveryBuddy 启动时会读取两个目标已有的 `models.json`。API 来源不存在时，应用会创建对应来源并导入模型；API 来源已经存在时，只匹配模型和发布选择状态，不覆盖本地模型配置。未选中的模型只会从本次发布中排除，不会从 WorkBuddy 或 CodeBuddy 中删除。
+EveryBuddy 启动时会读取两个目标已有的 `models.json`。API 来源不存在时，应用会创建对应来源并导入模型；API 来源已经存在时，只匹配模型和发布选择状态，不覆盖本地模型配置。再次发布时，未选中且确认属于当前 API 来源的模型会从目标配置中移除；无法确认归属的本地或外部模型会保留。
 
 ## 主要功能
 
@@ -97,7 +97,7 @@ EveryBuddy 启动时会读取两个目标已有的 `models.json`。API 来源不
 
 ## 发布前预览
 
-发布前会逐目标展示新增、更新和不变的模型数量。存在 Model ID 冲突时，需要明确确认是否使用当前 API 来源替换目标中的同名模型。
+发布前会逐目标展示新增、更新、移除和不变的模型数量。存在 Model ID 冲突时，需要明确确认是否使用当前 API 来源替换目标中的同名模型。
 
 ![EveryBuddy 发布前预览](docs/assets/everybuddy-publish-preview.png)
 
@@ -149,9 +149,9 @@ EveryBuddy 不把明文 Token 写入 SQLite、诊断日志或前端持久化状�
 ## 下载安装
 
 - macOS 12 或更高版本，发布包同时支持 Apple Silicon 和 Intel。
-- Windows 10 或更高版本，Alpha 阶段提供 x64 安装包。
+- Windows 10 或更高版本，提供 x64 安装包。
 
-首个 Alpha 安装包发布后，可从 [GitHub Releases](https://github.com/myxiaoao/everybuddy/releases) 下载。安装包暂未使用 Apple Developer ID 或 Windows Authenticode 平台签名，macOS Gatekeeper 和 Windows SmartScreen 会显示未验证开发者警告。
+安装包可从 [GitHub Releases](https://github.com/myxiaoao/everybuddy/releases) 下载。安装包暂未使用 Apple Developer ID 或 Windows Authenticode 平台签名，macOS Gatekeeper 和 Windows SmartScreen 会显示未验证开发者警告。
 
 只从本仓库下载安装包，并使用 Release 中的 `SHA256SUMS.txt` 校验文件：
 
@@ -166,7 +166,7 @@ EveryBuddy 不把明文 Token 写入 SQLite、诊断日志或前端持久化状�
 
 - Windows：在 SmartScreen 中选择「更多信息 → 仍要运行」。
 
-Tauri Updater 资产使用独立 Ed25519 key 签名，更新客户端不会接受签名校验失败的文件。GitHub 的 `releases/latest` 不会选择 Prerelease，因此 Alpha 阶段需要从 Releases 页面手动下载更新。正式发行前仍需补充 Apple notarization 和 Windows Authenticode。
+Tauri Updater 资产使用独立 Ed25519 key 签名，更新客户端不会接受签名校验失败的文件。GitHub 的 `releases/latest` 指向最新稳定版本，应用可以检查并安装通过签名校验的更新；平台签名补齐前，更新后的应用仍可能触发 Gatekeeper 或 SmartScreen 警告。
 
 ## 本地开发
 
