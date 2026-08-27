@@ -54,9 +54,10 @@ impl CapabilityResolver {
             ),
         ];
 
-        let metadata_is_non_text = explicit_non_text_output(metadata).is_some();
+        let supports_chat_configuration =
+            supports_chat_configuration_with_market(metadata, market_model);
         evidence.extend(metadata_evidence(metadata, &now));
-        if !metadata_is_non_text {
+        if explicit_non_text_output(metadata).is_none() {
             if let Some(market_model) = market_model {
                 evidence.extend(market_evidence(market_model, &now));
             }
@@ -67,32 +68,33 @@ impl CapabilityResolver {
         for item in &evidence {
             let replace = chosen
                 .get(item.capability.as_str())
-                .map(|current| item.source >= current.source)
+                .map(|current| evidence_priority(item.source) >= evidence_priority(current.source))
                 .unwrap_or(true);
             if replace {
                 chosen.insert(item.capability.as_str(), item);
             }
         }
 
-        let supports_reasoning = chosen.get("reasoning").is_some_and(|item| item.value);
-        let capabilities = CapabilitySet {
-            supports_tool_call: chosen.get("toolCall").is_some_and(|item| item.value),
-            supports_images: chosen.get("images").is_some_and(|item| item.value),
-            supports_reasoning,
-            reasoning_efforts: if supports_reasoning {
-                market_model
-                    .and_then(market_reasoning_efforts)
-                    .map(|efforts| {
-                        efforts
-                            .into_iter()
-                            .map(reasoning_effort_name)
-                            .map(ToString::to_string)
-                            .collect()
-                    })
-                    .unwrap_or_else(|| reasoning_efforts(metadata))
-            } else {
-                Vec::new()
-            },
+        let capabilities = if !supports_chat_configuration {
+            CapabilitySet::default()
+        } else {
+            let supports_reasoning = chosen.get("reasoning").is_some_and(|item| item.value);
+            CapabilitySet {
+                supports_tool_call: chosen.get("toolCall").is_some_and(|item| item.value),
+                supports_images: chosen.get("images").is_some_and(|item| item.value),
+                supports_reasoning,
+                reasoning_efforts: if supports_reasoning {
+                    metadata_reasoning_efforts(metadata)
+                        .or_else(|| market_model.and_then(market_reasoning_efforts))
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(reasoning_effort_name)
+                        .map(ToString::to_string)
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+            }
         };
 
         (capabilities, evidence)
@@ -132,6 +134,17 @@ impl CapabilityResolver {
         ]);
         model.capabilities = capabilities;
         model.updated_at = now;
+    }
+}
+
+fn evidence_priority(source: EvidenceSource) -> u8 {
+    match source {
+        EvidenceSource::Default => 0,
+        EvidenceSource::OpenRouter => 1,
+        EvidenceSource::Metadata => 2,
+        EvidenceSource::Imported => 3,
+        EvidenceSource::Probe => 4,
+        EvidenceSource::Manual => 5,
     }
 }
 
@@ -229,6 +242,57 @@ fn explicit_non_text_output(metadata: &Value) -> Option<&'static str> {
                         .any(|modality| modality.eq_ignore_ascii_case("text"))
             })
     })
+}
+
+fn explicit_text_output(metadata: &Value) -> bool {
+    [
+        "/output_modalities",
+        "/outputModalities",
+        "/architecture/output_modalities",
+    ]
+    .into_iter()
+    .any(|path| {
+        metadata
+            .pointer(path)
+            .and_then(Value::as_array)
+            .is_some_and(|modalities| {
+                modalities
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|modality| modality.eq_ignore_ascii_case("text"))
+            })
+    })
+}
+
+fn stored_market_supports_chat_configuration(metadata: &Value) -> Option<bool> {
+    metadata
+        .pointer("/everybuddyOpenRouterMatch/supportsTextOutput")
+        .and_then(Value::as_bool)
+}
+
+pub fn has_unverified_market_match(metadata: &Value) -> bool {
+    metadata.get("everybuddyOpenRouterMatch").is_some()
+        && stored_market_supports_chat_configuration(metadata).is_none()
+}
+
+fn supports_chat_configuration_with_market(
+    metadata: &Value,
+    market_model: Option<&MarketModel>,
+) -> bool {
+    if explicit_non_text_output(metadata).is_some() {
+        return false;
+    }
+    if explicit_text_output(metadata) {
+        return true;
+    }
+    market_model
+        .map(MarketModel::supports_chat_configuration)
+        .or_else(|| stored_market_supports_chat_configuration(metadata))
+        .unwrap_or(true)
+}
+
+pub fn supports_chat_configuration(metadata: &Value) -> bool {
+    supports_chat_configuration_with_market(metadata, None)
 }
 
 fn metadata_capability(metadata: &Value, capability: &str) -> Option<(bool, &'static str)> {
@@ -376,15 +440,6 @@ fn market_reasoning_efforts(model: &MarketModel) -> Option<Vec<ReasoningEffort>>
     })
 }
 
-fn reasoning_efforts(metadata: &Value) -> Vec<String> {
-    metadata_reasoning_efforts(metadata)
-        .unwrap_or_default()
-        .into_iter()
-        .map(reasoning_effort_name)
-        .map(ToString::to_string)
-        .collect()
-}
-
 pub fn infer_vendor(model_id: &str) -> String {
     model_id
         .split_once('/')
@@ -425,17 +480,15 @@ pub fn configuration_from_sources(
     market_model: Option<&MarketModel>,
     capabilities: &CapabilitySet,
 ) -> ModelConfiguration {
-    if explicit_non_text_output(metadata).is_some()
-        || market_model.is_some_and(|model| !model.supports_chat_configuration())
-    {
+    if !supports_chat_configuration_with_market(metadata, market_model) {
         return ModelConfiguration::default();
     }
 
     let reasoning_metadata = metadata.get("reasoning").filter(|value| value.is_object());
     let metadata_supported_efforts = metadata_reasoning_efforts(metadata);
     let market_supported_efforts = market_model.and_then(market_reasoning_efforts);
-    let supported_efforts = market_supported_efforts
-        .or(metadata_supported_efforts)
+    let supported_efforts = metadata_supported_efforts
+        .or(market_supported_efforts)
         .unwrap_or_else(|| {
             capabilities
                 .reasoning_efforts
@@ -443,40 +496,36 @@ pub fn configuration_from_sources(
                 .filter_map(|value| parse_reasoning_effort(value))
                 .collect()
         });
-    let default_effort = market_model
-        .and_then(MarketModel::default_reasoning_effort)
-        .map(parse_reasoning_effort)
-        .unwrap_or_else(|| {
-            reasoning_metadata
-                .and_then(|value| value.get("defaultEffort"))
-                .and_then(Value::as_str)
+    let default_effort = reasoning_metadata
+        .and_then(|value| value.get("defaultEffort"))
+        .and_then(Value::as_str)
+        .and_then(parse_reasoning_effort)
+        .or_else(|| {
+            market_model
+                .and_then(MarketModel::default_reasoning_effort)
                 .and_then(parse_reasoning_effort)
         })
         .filter(|effort| supported_efforts.is_empty() || supported_efforts.contains(effort));
 
     let mut configuration = ModelConfiguration {
         endpoint_override: None,
-        max_input_tokens: market_model
-            .and_then(MarketModel::max_input_tokens)
-            .or_else(|| {
-                optional_u64(
-                    metadata,
-                    &["maxInputTokens", "max_input_tokens", "context_window"],
-                )
-            })
-            .filter(|value| (1..=crate::models::MAX_SAFE_INTEGER).contains(value)),
-        max_output_tokens: market_model
-            .and_then(MarketModel::max_output_tokens)
-            .or_else(|| {
-                optional_u64(
-                    metadata,
-                    &["maxOutputTokens", "max_output_tokens", "max_tokens"],
-                )
-            })
-            .filter(|value| (1..=crate::models::MAX_SAFE_INTEGER).contains(value)),
-        temperature: market_model
-            .and_then(MarketModel::temperature)
-            .or_else(|| optional_f64(metadata, &["temperature"]))
+        max_input_tokens: optional_u64(
+            metadata,
+            &["maxInputTokens", "max_input_tokens", "context_window"],
+        )
+        .filter(|value| (1..=crate::models::MAX_SAFE_INTEGER).contains(value))
+        .or_else(|| market_model.and_then(MarketModel::max_input_tokens))
+        .filter(|value| (1..=crate::models::MAX_SAFE_INTEGER).contains(value)),
+        max_output_tokens: optional_u64(
+            metadata,
+            &["maxOutputTokens", "max_output_tokens", "max_tokens"],
+        )
+        .filter(|value| (1..=crate::models::MAX_SAFE_INTEGER).contains(value))
+        .or_else(|| market_model.and_then(MarketModel::max_output_tokens))
+        .filter(|value| (1..=crate::models::MAX_SAFE_INTEGER).contains(value)),
+        temperature: optional_f64(metadata, &["temperature"])
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .or_else(|| market_model.and_then(MarketModel::temperature))
             .filter(|value| value.is_finite() && *value >= 0.0),
         only_reasoning: optional_bool(metadata, &["onlyReasoning", "only_reasoning"])
             .unwrap_or(false),
@@ -490,14 +539,12 @@ pub fn configuration_from_sources(
             summary: reasoning_metadata
                 .and_then(|value| value.get("summary"))
                 .and_then(Value::as_str)
-                .and_then(parse_reasoning_summary),
-            can_disable_thinking: market_model
-                .and_then(MarketModel::can_disable_thinking)
-                .or_else(|| {
-                    reasoning_metadata
-                        .and_then(|value| value.get("canDisableThinking"))
-                        .and_then(Value::as_bool)
-                })
+                .and_then(parse_reasoning_summary)
+                .filter(|summary| summary.is_supported_target_value()),
+            can_disable_thinking: reasoning_metadata
+                .and_then(|value| value.get("canDisableThinking"))
+                .and_then(Value::as_bool)
+                .or_else(|| market_model.and_then(MarketModel::can_disable_thinking))
                 .unwrap_or(true),
         },
         use_custom_protocol: optional_bool(metadata, &["useCustomProtocol", "use_custom_protocol"])
@@ -711,7 +758,7 @@ mod tests {
     }
 
     #[test]
-    fn openrouter_capabilities_override_gateway_metadata() {
+    fn gateway_metadata_capabilities_override_openrouter() {
         let metadata = serde_json::json!({
             "supportsImages": true,
             "supportsToolCall": true,
@@ -730,9 +777,71 @@ mod tests {
         let (capabilities, _) =
             CapabilityResolver::resolve_with_market("gpt-5.6", &metadata, Some(&market_model), &[]);
 
-        assert!(!capabilities.supports_tool_call);
-        assert!(!capabilities.supports_images);
-        assert!(!capabilities.supports_reasoning);
+        assert!(capabilities.supports_tool_call);
+        assert!(capabilities.supports_images);
+        assert!(capabilities.supports_reasoning);
+    }
+
+    #[test]
+    fn explicit_non_text_gateway_metadata_cannot_be_overridden_by_old_evidence() {
+        let metadata = serde_json::json!({
+            "architecture": { "output_modalities": ["image"] }
+        });
+        let probe = evidence(
+            "images",
+            true,
+            EvidenceSource::Probe,
+            "Old endpoint probe",
+            "2026-08-20T00:00:00Z",
+        );
+        let imported = evidence(
+            "toolCall",
+            true,
+            EvidenceSource::Imported,
+            "Old target import",
+            "2026-08-20T00:00:00Z",
+        );
+
+        let (capabilities, _) =
+            CapabilityResolver::resolve("image-generator", &metadata, &[probe, imported]);
+
+        assert_eq!(capabilities, CapabilitySet::default());
+    }
+
+    #[test]
+    fn persisted_non_text_catalog_match_survives_resolve_without_catalog() {
+        let metadata = serde_json::json!({
+            "everybuddyOpenRouterMatch": {
+                "source": "openrouter",
+                "modelId": "provider/image-model",
+                "supportsTextOutput": false
+            }
+        });
+        let imported = evidence(
+            "images",
+            true,
+            EvidenceSource::Imported,
+            "Old target import",
+            "2026-08-20T00:00:00Z",
+        );
+
+        let (capabilities, _) = CapabilityResolver::resolve("image-model", &metadata, &[imported]);
+
+        assert_eq!(capabilities, CapabilitySet::default());
+        assert!(!supports_chat_configuration(&metadata));
+    }
+
+    #[test]
+    fn legacy_catalog_match_without_text_eligibility_stays_unverified() {
+        let metadata = serde_json::json!({
+            "everybuddyOpenRouterMatch": {
+                "source": "openrouter",
+                "modelId": "provider/legacy-model"
+            }
+        });
+
+        assert!(supports_chat_configuration(&metadata));
+        assert!(has_unverified_market_match(&metadata));
     }
 
     #[test]
@@ -808,7 +917,7 @@ mod tests {
     }
 
     #[test]
-    fn openrouter_configuration_overrides_gateway_metadata_with_fallbacks() {
+    fn gateway_metadata_configuration_overrides_openrouter_with_fallbacks() {
         let metadata = serde_json::json!({
             "maxInputTokens": 8_192,
             "maxOutputTokens": 2_048,
@@ -852,18 +961,46 @@ mod tests {
             &capabilities,
         );
 
-        assert_eq!(configuration.max_input_tokens, Some(262_144));
-        assert_eq!(configuration.max_output_tokens, Some(32_768));
-        assert_eq!(configuration.temperature, Some(0.7));
+        assert_eq!(configuration.max_input_tokens, Some(8_192));
+        assert_eq!(configuration.max_output_tokens, Some(2_048));
+        assert_eq!(configuration.temperature, Some(0.2));
         assert_eq!(
             configuration.reasoning.supported_efforts,
-            vec![ReasoningEffort::Medium, ReasoningEffort::High]
+            vec![ReasoningEffort::Low]
         );
         assert_eq!(
             configuration.reasoning.default_effort,
-            Some(ReasoningEffort::High)
+            Some(ReasoningEffort::Low)
         );
-        assert!(!configuration.reasoning.can_disable_thinking);
+        assert!(configuration.reasoning.can_disable_thinking);
+    }
+
+    #[test]
+    fn invalid_gateway_configuration_values_fall_back_to_openrouter() {
+        let metadata = serde_json::json!({
+            "maxInputTokens": 0,
+            "maxOutputTokens": 9_007_199_254_740_992_u64,
+            "temperature": -0.1
+        });
+        let market_model: MarketModel = serde_json::from_value(serde_json::json!({
+            "id": "provider/model",
+            "context_length": 262_144,
+            "architecture": { "output_modalities": ["text"] },
+            "top_provider": { "max_completion_tokens": 32_768 },
+            "default_parameters": { "temperature": 0.7 }
+        }))
+        .unwrap();
+
+        let configuration = configuration_from_sources(
+            "model",
+            &metadata,
+            Some(&market_model),
+            &CapabilitySet::default(),
+        );
+
+        assert_eq!(configuration.max_input_tokens, Some(262_144));
+        assert_eq!(configuration.max_output_tokens, Some(32_768));
+        assert_eq!(configuration.temperature, Some(0.7));
     }
 
     #[test]

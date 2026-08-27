@@ -23,7 +23,7 @@ describe("EveryBuddy workspace", () => {
       expect(screen.getAllByText("GPT-5.6").length).toBeGreaterThan(0),
     );
     expect(screen.getAllByText("Sub2API").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText("v0.1.0-alpha.1")).toBeInTheDocument();
+    expect(screen.getByText("v0.1.0")).toBeInTheDocument();
     expect(screen.getByText("Local Relay")).toBeInTheDocument();
     expect(screen.getAllByText("WorkBuddy").length).toBeGreaterThan(0);
     expect(screen.getAllByText("CodeBuddy").length).toBeGreaterThan(0);
@@ -103,6 +103,15 @@ describe("EveryBuddy workspace", () => {
       screen.getByText("当前选择已覆盖自动匹配结果。"),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("switch", { name: "自定义协议" }));
+    expect(screen.getByRole("button", { name: "主动探测" })).toBeDisabled();
+    fireEvent.change(
+      screen.getByRole("textbox", { name: /^接口地址（可选）/ }),
+      {
+        target: {
+          value: "https://gateway.example/v1/images/generations",
+        },
+      },
+    );
     fireEvent.click(screen.getByRole("button", { name: "保存模型配置" }));
 
     await waitFor(() =>
@@ -361,6 +370,36 @@ describe("EveryBuddy workspace", () => {
     expect(alert).toHaveTextContent("当前 API 来源中已有相同的 Model ID");
     expect(alert).toHaveTextContent("使用其他 Model ID，或编辑已有模型");
     expect(screen.getByRole("status")).not.toHaveTextContent("模型已存在");
+
+    expect(dialog).toContainElement(alert);
+    fireEvent.click(within(alert).getByRole("button", { name: "关闭" }));
+    expect(dialog).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("textbox", { name: /Model ID/ }),
+    ).toHaveValue("gpt-5.6");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("retranslates the startup announcement after changing language", async () => {
+    vi.spyOn(api, "saveSettings").mockImplementation(
+      async (settings) => settings,
+    );
+    render(<App />);
+
+    await screen.findAllByText("GPT-5.6");
+    const liveRegion = document.querySelector(".live-region");
+    expect(liveRegion).toHaveTextContent("发现 1 个需要关注的配置项");
+
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    fireEvent.click(within(dialog).getByRole("radio", { name: "English" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() =>
+      expect(liveRegion).toHaveTextContent(
+        "Startup configuration recovery completed: imported 1 API and 2 models, with 1 configuration item needing attention.",
+      ),
+    );
   });
 
   it("uses app dialogs for destructive confirmations", async () => {

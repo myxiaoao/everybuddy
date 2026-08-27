@@ -92,7 +92,7 @@ Token -> macOS Keychain / Windows Credential Manager
 
 SQLite 文件位于 Tauri `app_data_dir/everybuddy.db`。
 
-数据库使用 `PRAGMA user_version` 管理 schema，当前 `SCHEMA_VERSION` 为 `2`。已有旧版数据库升级前会通过 SQLite Backup API 保存到同级 `migration-backups/` 目录；高于当前版本的数据库会被拒绝打开，避免旧版本应用写坏新 schema。
+数据库使用 `PRAGMA user_version` 管理 schema，当前 `SCHEMA_VERSION` 为 `3`。已有旧版数据库升级前会通过 SQLite Backup API 保存到同级 `migration-backups/` 目录；v3 会清空旧版已截断且无法可靠还原的 Custom Protocol `endpointOverride`，要求用户重新填写完整请求 URL。高于当前版本的数据库会被拒绝打开，避免旧版本应用写坏新 schema。
 
 - `gateway_profiles`：保存名称、规范化 `api_root`、`token_ref` 和时间戳，不保存 Token。
 - `models`：主键为 `{gateway_id}::{upstream_model_id}`。相同上游模型 ID 在不同 Gateway 中保持独立。`capabilities_json` 保存能力证据结果，`configuration_json` 保存完整模型调用参数。手动模型在 `metadata.everybuddySource` 中标记为 `manual`，Target 导入模型标记为 `targetImport`。
@@ -103,7 +103,7 @@ SQLite 文件位于 Tauri `app_data_dir/everybuddy.db`。
 - `deleted_gateway_sources`：保存已删除或轮换来源的 tombstone，避免启动导入从 Target 恢复旧 Gateway。
 - `stale_gateway_models`：来源变化后临时隔离旧模型。刷新成功前，旧模型不参与 UI、Target 匹配、编辑和发布。
 
-模型记录包含上游 ID、名称、Vendor、Capability、Model Configuration、Evidence 和清理后的原始 metadata。清理逻辑递归遍历 Object 和 Array，字段名转为小写并忽略 `_`、`-` 后，移除 `apiKey`、`token`、`accessToken`、`refreshToken`、`authorization`、`password`、`secret`、`clientSecret` 和 `credentials` 等 secret-like 字段。响应或导入 metadata 回显当前 Token 时直接拒绝，错误信息不包含原值。模型刷新会更新上游 metadata 和 Capability；未人工修改的发现模型重新解析 Model Configuration，手动添加、Target 导入或存在 `Manual` Evidence 的模型保留本地配置。`Imported`、`Probe`、`Manual` Evidence 在刷新时继续保留。名称和 Vendor 的人工覆盖按字段保存，只保护用户明确提供或修改的字段。来源变化时，刷新使用包含 stale 模型的快照恢复人工配置；成功替换后再解除 stale 状态。写入前同时比较 API Profile 与模型版本快照，避免刷新期间的本地编辑被旧响应覆盖。
+模型记录包含上游 ID、名称、Vendor、Capability、Model Configuration、Evidence 和清理后的原始 metadata。清理逻辑递归遍历 Object 和 Array，字段名转为小写并忽略 `_`、`-` 后，移除 `apiKey`、`token`、`accessToken`、`refreshToken`、`authorization`、`password`、`secret`、`clientSecret` 和 `credentials` 等 secret-like 字段。响应或导入 metadata 回显当前 Token 时直接拒绝，错误信息不包含原值。模型刷新会更新上游 metadata 和 Capability；未人工修改的发现模型重新解析 Model Configuration，手动添加、Target 导入或存在 `Manual` Evidence 的模型保留本地配置。`Imported`、`Probe`、`Manual` Evidence 在请求目标不变的刷新中继续保留；模型 `endpointOverride` 或 `useCustomProtocol` 变化时删除旧 `Probe` Evidence 并重新解析 Capability。OpenRouter 的 text-output eligibility 随匹配结果持久化，保证后续 Probe 和模型更新继续执行同一 non-text hard guard。名称和 Vendor 的人工覆盖按字段保存，只保护用户明确提供或修改的字段。来源变化时，刷新使用包含 stale 模型的快照恢复人工配置；成功替换后再解除 stale 状态。写入前同时比较 API Profile 与模型版本快照，避免刷新期间的本地编辑被旧响应覆盖。
 
 ## 6. Gateway 协议
 
@@ -116,7 +116,7 @@ SQLite 文件位于 Tauri `app_data_dir/everybuddy.db`。
 | `https://api.example.com/v1/models` | `https://api.example.com/v1`       |
 | `https://api.example.com/proxy`     | `https://api.example.com/proxy/v1` |
 
-URL 只允许 `http` 或 `https`，不能包含 User Info、Query 或 Fragment。远程 Gateway 必须使用 HTTPS；HTTP 仅允许 `localhost`、`127.0.0.1`、`::1` 等 loopback 地址。模型级 `endpointOverride` 和启动导入的 Target URL 使用相同规则。Gateway Client 不自动跟随 HTTP Redirect，3xx 响应按协议错误处理。
+URL 只允许 `http` 或 `https`，不能包含 User Info、Query 或 Fragment。远程 Gateway 必须使用 HTTPS；HTTP 仅允许 `localhost`、`127.0.0.1`、`::1` 等 loopback 地址。标准模型的 `endpointOverride` 按 API root 规范化；Custom Protocol 保留完整请求路径。启动导入的 Target URL 根据 `useCustomProtocol` 使用相同分支。Gateway Client 不自动跟随 HTTP Redirect，3xx 响应按协议错误处理。
 
 ### 6.2 模型发现
 
@@ -127,31 +127,31 @@ Authorization: Bearer {token}
 
 响应必须包含 `data` 数组，每个模型至少包含非空且不重复的 `id`。可选 `name` 或 `display_name` 用作显示名称。模型发现与 Probe 的单次响应体上限均为 4 MiB；模型发现最多接受 10,000 条记录，超过限制时拒绝整次响应。发现操作不调用模型，不产生模型 Token 消耗。
 
-Gateway 返回的结构化 metadata 是 OpenRouter 无法匹配时的 fallback。EveryBuddy 支持顶层和 `capabilities` 内的 Capability boolean、`supported_parameters`、`input_modalities`、`architecture.input_modalities`、`features`，以及 `reasoning.supportedEfforts` 等常见 OpenAI-compatible 扩展字段。Provider 依次从 `vendor`、`provider`、`owned_by`、`ownedBy`、`organization` 等 metadata 读取并规范化。
+Gateway 返回的结构化 metadata 代表当前 API 来源，明确字段优先于公共 OpenRouter 目录；OpenRouter 只补齐缺失字段。EveryBuddy 支持顶层和 `capabilities` 内的 Capability boolean、`supported_parameters`、`input_modalities`、`architecture.input_modalities`、`features`，以及 `reasoning.supportedEfforts` 等常见 OpenAI-compatible 扩展字段。Provider 依次从 `vendor`、`provider`、`owned_by`、`ownedBy`、`organization` 等 metadata 读取并规范化。
 
 OpenRouter Directory 使用 lazy load：打开应用和启动配置恢复不发起请求，首次模型发现或手动添加模型时才读取不需要认证的 OpenRouter Models API。成功响应同时写入内存和 Tauri `app_data_dir/openrouter-models-cache.json`，有效期为 6 小时；同一进程的并发调用通过 single-flight 串行合并。请求失败后 15 分钟内不重复尝试，并优先继续使用过期磁盘快照；没有任何快照时才回退 Gateway metadata 和保守默认值。因此连续刷新多个 Gateway 不会重复下载目录。
 
 OpenRouter 只对当前 Gateway 返回或用户手动输入的 Model ID 做本机匹配，不把全量模型导入模型库，也不会向 OpenRouter 发送用户 Token、Base URL、模型选择或其他 Gateway metadata。请求超时为 5 秒，响应上限为 8 MiB 和 10,000 个模型。
 
-模型解析将能力事实来源与实际调用 ID 分开。匹配顺序为：完整 Model ID、`alias_target.slug`、共享 `canonical_slug` 的无变体基础记录、Provider namespace + leaf ID、全目录唯一 leaf ID。共享 Canonical slug 时优先选择不带 `:` 变体后缀且不是 `~` Alias 的记录；没有共享 Canonical slug 时，`:batch` 和 `:free` 才回退同名基础记录。禁止使用前缀模糊匹配，例如 `openai/gpt-5.6-sol` 和 `openai/gpt-5.6-sol-pro` 始终是两个独立能力来源。Gateway 返回 `openai/gpt-5.6-sol:batch` 时可使用 `openai/gpt-5.6-sol` 的能力，但发布到 Target 的 `id` 仍保持 `openai/gpt-5.6-sol:batch`。Gateway 未提供显示名称时，才使用匹配记录的 OpenRouter `name`。
+模型解析将能力字段来源与实际调用 ID 分开。匹配顺序为：完整 Model ID、Provider namespace + leaf ID、全目录唯一 leaf ID；查询值没有精确记录时，再通过共享 `canonical_slug` 定位无变体基础记录。精确命中的 Batch/Free 变体或 Alias 保留自身明确字段，并按字段从 `alias_target.slug`、共享 `canonical_slug` 或同名基础记录补齐缺失值，不再整体替换成基础记录。禁止使用前缀模糊匹配，例如 `openai/gpt-5.6-sol` 和 `openai/gpt-5.6-sol-pro` 始终独立。发布到 Target 的 `id` 保持 Gateway 实际返回值。Gateway 未提供显示名称时，才使用匹配记录的 OpenRouter `name`。
 
 ### 6.3 主动 Probe
 
 Probe 只能由用户确认后执行，一次最多发送 3 个最小请求：
 
 1. 提供单个 Function Tool，检查响应是否返回 `tool_calls`。
-2. 提供一个 1×1 Data URL 图片，检查请求是否被接受。
+2. 提供一个固定的四色条 Data URL 图片，仅在响应准确返回 `MAGENTA-GREEN-BLUE-YELLOW` 时确认 Vision。
 3. 发送 `reasoning_effort: low`，仅在响应报告 Reasoning Token 或 Reasoning Content 时确认能力。
 
-请求成功但没有可验证证据时，EveryBuddy 保留原有能力，不把「参数未报错」当作能力确认。
+请求成功但没有可验证证据时，EveryBuddy 不把「参数未报错」当作能力确认。Vision challenge 的文本提示不包含期望答案。每次 Probe 先移除旧 Probe Evidence，再写入本次可验证结果；没有新结果时回退其他 Evidence 来源。Custom Protocol 不保证 Chat Completions 合同，因此不执行主动 Probe。
 
 ## 7. Capability Resolver
 
-证据优先级固定为：`manual` > `probe` > `imported` > `openRouter` > Gateway `metadata` > `default`。OpenRouter 精确匹配后同时生成 Tool Call、Vision、Reasoning 的 `true` 或 `false` Evidence，因此其结果覆盖 Gateway 自带能力字段。未知模型在没有 OpenRouter 快照和 Gateway metadata 时，三项能力均默认为 `false`。Target 导入、Probe 和人工覆盖会写入独立 Evidence，并在后续模型刷新时保留。
+证据优先级固定为：`manual` > `probe` > `imported` > Gateway `metadata` > `openRouter` > `default`。Gateway 明确字段描述当前 API 来源，OpenRouter 只作为公共目录 fallback。明确的非 text-output 资格是硬约束，即使存在 `Manual`、`Probe` 或 `Imported` positive Evidence，也不会投影聊天能力或调用参数。未知模型在没有 OpenRouter 快照和 Gateway metadata 时，三项能力均默认为 `false`。Target 导入、Probe 和人工覆盖会写入独立 Evidence；Probe 仅在实际请求目标不变时保留。
 
 Capability 表达模型是否具备某项能力，Model Configuration 表达 WorkBuddy 调用模型时使用的参数。两者分开持久化，避免模型刷新覆盖人工配置。
 
-OpenRouter 精确匹配后的自动配置优先于 Gateway metadata；已有 Target 导入配置、手动添加模型配置和人工覆盖仍按原值保留。字段映射如下：
+Gateway metadata 的明确自动配置优先于 OpenRouter 精确匹配，OpenRouter 只补缺失字段；已有 Target 导入配置、手动添加模型配置和人工覆盖仍按原值保留。字段映射如下：
 
 | OpenRouter 字段                                          | EveryBuddy / `models.json` 字段 | 映射规则                                                                                         |
 | -------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -161,14 +161,14 @@ OpenRouter 精确匹配后的自动配置优先于 Gateway metadata；已有 Tar
 | `reasoning` 对象或 Reasoning 相关 `supported_parameters` | `supportsReasoning`             | `reasoning`、`reasoning_effort` 或 `include_reasoning` 任一明确出现且输出包含 `text` 时为 `true` |
 | `context_length`                                         | `maxInputTokens`                | 仅对 text-output 模型接受大于 0 的值；缺失时使用 `top_provider.context_length`                   |
 | `top_provider.max_completion_tokens`                     | `maxOutputTokens`               | 仅对 text-output 模型接受大于 0 的值；参数支持标记本身不生成 Token 上限                          |
-| 非空 `default_parameters.temperature`                    | `temperature`                   | 仅对 text-output 模型映射；`null` 时回退 Gateway metadata                                        |
+| 非空 `default_parameters.temperature`                    | `temperature`                   | 仅对 text-output 模型映射；Gateway metadata 缺失时才使用                                         |
 | `reasoning.supported_efforts`                            | `reasoning.supportedEfforts`    | 保留目标支持的六个强度，去重并保持 OpenRouter 顺序；`none` 不作为强度写入                        |
 | `reasoning.default_effort`                               | `reasoning.defaultEffort`       | 必须是支持的强度；`none` 映射为 `null`                                                           |
 | `reasoning.mandatory`                                    | `reasoning.canDisableThinking`  | 取逻辑反值；缺失时可用 Effort 中明确的 `none` 判断可以关闭                                       |
 
 Reasoning 强度不使用内置模型 Preset。只有 OpenRouter 的 `reasoning.supported_efforts`、Gateway 明确返回的 `reasoning.supportedEfforts`、Target 导入值或人工设置才能生成具体档位；仅出现 `reasoning_effort` 参数名称时不会推测档位。`reasoning.default_enabled` 只证明 Reasoning metadata 存在，但没有语义等价的 WorkBuddy 配置字段；不能将它映射成 `onlyReasoning`。同理，`pricing`、`benchmarks`、`knowledge_cutoff`、`description`、`supported_voices`、`links`、`default_parameters` 中除 Temperature 外的采样参数，以及没有目标字段的 `supported_parameters` 均不写入 `models.json`。`canonical_slug` 和 `alias_target` 只参与能力来源解析，不作为 Target 配置字段。
 
-2026-08-25 对 OpenRouter 实时响应的覆盖审计包含 557 个模型和 20 个顶层字段，其中 417 个模型输出包含 `text`，140 个为非 text-output 模型。WorkBuddy/CodeBuddy Custom Model schema 没有 Audio、Video、File output、Embedding、Pricing、Benchmark、Voice 或生命周期字段，因此这些字段不能被等价投影；非 text-output 模型也不会写入 Token、Temperature 或 Reasoning 调用配置。57 个返回零值 Token 上限的记录按缺失处理。Provider 不依赖固定枚举，目录出现新的合法 namespace 时可直接作为 `vendor`。这里的“覆盖”指所有具有目标 schema 语义等价项的字段都完成映射，不代表复制 OpenRouter 原始对象。
+2026-08-27 对 OpenRouter 实时响应的覆盖审计包含 562 个模型和 20 个顶层字段，其中 417 个模型输出包含 `text`，145 个为非 text-output 模型。WorkBuddy/CodeBuddy Custom Model schema 没有 Audio、Video、File output、Embedding、Pricing、Benchmark、Voice 或生命周期字段，因此这些字段不能被等价投影；非 text-output 模型也不会写入 Token、Temperature 或 Reasoning 调用配置。57 个返回零值 Token 上限的记录按缺失处理。Provider 不依赖固定枚举，目录出现新的合法 namespace 时可直接作为 `vendor`。这里的“覆盖”指所有具有目标 schema 语义等价项的字段都完成映射，不代表复制 OpenRouter 原始对象。
 
 这套映射由 OpenRouter 返回的结构化字段驱动，不枚举模型名称。后续新模型只要继续返回相同字段即可自动适配；新增 OpenRouter 字段只有在 WorkBuddy 或 CodeBuddy 出现语义等价字段后才扩展对应 Adapter。
 
@@ -182,9 +182,9 @@ Reasoning Probe 只验证 `low` 参数是否被接受以及响应中是否出现
 | Model Configuration     | `maxInputTokens`、`maxOutputTokens`、`temperature`、`onlyReasoning`、`useCustomProtocol`                                         |
 | Reasoning Configuration | `reasoning.effort`、`reasoning.defaultEffort`、`reasoning.supportedEfforts`、`reasoning.summary`、`reasoning.canDisableThinking` |
 
-模型级 `endpointOverride` 可覆盖 API Profile 的 `url`。`useCustomProtocol: true` 时 WorkBuddy 直接使用该地址，不自动追加 `/chat/completions`。
+模型级 `endpointOverride` 可覆盖 API Profile 的 `url`。`useCustomProtocol: true` 时必须提供完整请求 URL；WorkBuddy 和 CodeBuddy 直接使用该地址，不自动追加 `/v1` 或 `/chat/completions`。
 
-Reasoning Effort 支持 `minimal`、`low`、`medium`、`high`、`xhigh` 和 `max`。当前观察到的 WorkBuddy SDK Console 将 Summary 定义为 `auto | always | never`，模型选择器则读取 `auto | concise | detailed`；EveryBuddy 接受两组值，并在界面中显示兼容性提示。
+Reasoning Effort 支持 `minimal`、`low`、`medium`、`high`、`xhigh` 和 `max`。WorkBuddy 5.3.14 runtime 与共享的 CodeBuddy Target Adapter 仅保留 `auto | concise | detailed` Reasoning Summary。Rust 和 TypeScript 数据类型保留 `always | never`，仅用于读取历史数据库；编辑保存和发布前必须替换为受支持值。
 
 ## 8. Configuration Target
 
@@ -223,6 +223,8 @@ Reasoning Effort 支持 `minimal`、`low`、`medium`、`high`、`xhigh` 和 `max
 ```
 
 旧包装格式必须包含 `models` 数组。Codec 更新已管理字段时保留未知模型字段、未知 Reasoning 子字段、未知顶层字段和原有 Envelope。用户清空可选的已管理字段时，Codec 会从目标模型中移除对应旧值。单个 Target 配置上限为 8 MiB 和 10,000 个模型；同一文件出现重复 Model ID 时拒绝解析，避免目标产品采用不确定条目。
+
+WorkBuddy 与 CodeBuddy 的默认路径不同，但共用 `model_config` 和 `ConfigDocument` 序列化逻辑。同一次双目标发布对相同输入生成一致的模型配置内容，各自的现有 envelope 和未知字段仍按目标文件独立保留。
 
 ### 8.1 启动导入与匹配
 
@@ -313,7 +315,7 @@ pnpm tauri build
 
 Fake Gateway 测试实际验证 HTTP Path、Bearer Header 和模型响应解析。Frontend 检查在 Linux 上执行一次；Rust 和 Tauri Bundle 在 macOS、Windows 上分别验证。稳定的 `CI Gate` 聚合所有适用 Job，作为 Branch Ruleset 的 Required Status Check。
 
-模型库测试覆盖多个 Gateway 保存相同上游 Model ID、手动和导入模型在 Refresh 后保留、来源变化后的 stale 隔离与恢复、刷新期间本地编辑的并发冲突，以及上游后来返回同一 ID 时不生成重复记录。Capability 测试覆盖 OpenRouter modalities/parameters 对 Gateway metadata 的覆盖、基础 ID、Delivery Variant、Alias 与 Canonical slug 解析、Pro 型号隔离、动态 Provider namespace、Reasoning Effort alias、`none` 转换、`mandatory`、默认 Effort、Temperature、Token 上限和非 text-output 隔离；OpenRouter Directory Client 测试覆盖进程内复用和跨启动磁盘缓存。Gateway 测试覆盖远程 HTTP 拒绝、本机 HTTP、4 MiB 响应上限、10,000 模型上限、重复 Model ID 和短 Token 回显隔离。Target Import 测试覆盖数组和 wrapped schema、重复启动幂等、序列化导入、WorkBuddy 冲突优先级、Custom Protocol 精确匹配、同 URL 不同 Token、缺失或歧义凭据、来源轮换和删除 tombstone、损坏 JSON、非法参数、凭据清理失败和 Token 隔离。
+模型库测试覆盖多个 Gateway 保存相同上游 Model ID、手动和导入模型在 Refresh 后保留、来源变化后的 stale 隔离与恢复、刷新期间本地编辑的并发冲突，以及上游后来返回同一 ID 时不生成重复记录。Capability 测试覆盖 Gateway metadata 对 OpenRouter 的字段优先级、基础 ID、Delivery Variant、Alias 与 Canonical slug 的字段级 fallback、Pro 型号隔离、动态 Provider namespace、Reasoning Effort alias、`none` 转换、`mandatory`、默认 Effort、Temperature、Token 上限和非 text-output 硬约束；OpenRouter Directory Client 测试覆盖进程内复用和跨启动磁盘缓存。Gateway 测试覆盖远程 HTTP 拒绝、本机 HTTP、4 MiB 响应上限、10,000 模型上限、重复 Model ID、短 Token 回显隔离和 Vision challenge 响应校验。Target Import 测试覆盖数组和 wrapped schema、重复启动幂等、序列化导入、WorkBuddy 冲突优先级、Custom Protocol 精确匹配、同 URL 不同 Token、缺失或歧义凭据、来源轮换和删除 tombstone、损坏 JSON、非法参数、凭据清理失败和 Token 隔离。
 
 发布测试覆盖 WorkBuddy 单目标、CodeBuddy 单目标、双目标成功、第二目标失败补偿、首次创建文件的失败清理、API 与 Keychain revision、路径和 symlink 变化、写前 Drift、外部修改后的条件回滚、备份恢复、恢复状态保存失败回滚、每个目标保留 10 份备份，以及 SQLite 状态 transaction 失败后的文件回滚。Target 测试覆盖 8 MiB/10,000 条限制和重复 Model ID。Gateway Service 测试覆盖保存、删除和补偿失败，错误文本不得包含 Token。
 

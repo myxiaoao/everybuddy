@@ -9,9 +9,12 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::{
-    capability::{configuration_from_sources, evidence, infer_vendor, CapabilityResolver},
+    capability::{
+        configuration_from_sources, evidence, infer_vendor, supports_chat_configuration,
+        CapabilityResolver,
+    },
     error::CommandError,
-    gateway::normalize_api_root,
+    gateway::{normalize_api_root, normalize_request_url},
     gateway_service::GatewayService,
     market_catalog::MarketModel,
     models::{
@@ -255,7 +258,7 @@ pub async fn probe_model(
         .probe(&profile, &token, &model)
         .await
         .map_err(CommandError::from)?;
-    model.evidence.extend(probe_evidence);
+    replace_probe_evidence(&mut model, probe_evidence);
     let (capabilities, evidence) =
         CapabilityResolver::resolve(&model.id, &model.metadata, &model.evidence);
     model.capabilities = capabilities;
@@ -287,6 +290,16 @@ pub async fn probe_model(
     })
 }
 
+fn replace_probe_evidence(
+    model: &mut ManagedModel,
+    probe_evidence: Vec<crate::models::CapabilityEvidence>,
+) {
+    model
+        .evidence
+        .retain(|item| item.source != EvidenceSource::Probe);
+    model.evidence.extend(probe_evidence);
+}
+
 #[tauri::command]
 pub fn update_model(
     input: ModelUpdateInput,
@@ -308,18 +321,75 @@ pub fn update_model(
     let configuration = normalize_model_configuration(input.configuration, &input.capabilities)
         .map_err(CommandError::from)?;
     let normalized_vendor = vendor.to_ascii_lowercase();
-    record_identity_override(&mut model, name, &normalized_vendor);
+    apply_model_update(
+        &mut model,
+        input.capabilities,
+        configuration,
+        name,
+        &normalized_vendor,
+    );
+    state.store.save_model(&model).map_err(CommandError::from)?;
+    Ok(model)
+}
+
+fn apply_model_update(
+    model: &mut ManagedModel,
+    mut capabilities: crate::models::CapabilitySet,
+    mut configuration: ModelConfiguration,
+    name: &str,
+    normalized_vendor: &str,
+) {
+    let supports_chat = supports_chat_configuration(&model.metadata);
+    if !supports_chat {
+        capabilities = Default::default();
+        configuration.max_input_tokens = None;
+        configuration.max_output_tokens = None;
+        configuration.temperature = None;
+        configuration.only_reasoning = false;
+        configuration.reasoning = Default::default();
+        model.evidence.retain(|item| {
+            item.source != EvidenceSource::Manual
+                || !matches!(
+                    item.capability.as_str(),
+                    "toolCall" | "images" | "reasoning"
+                )
+        });
+    }
+    let previous_capabilities = model.capabilities.clone();
+    let request_target_changed = model.configuration.endpoint_override
+        != configuration.endpoint_override
+        || model.configuration.use_custom_protocol != configuration.use_custom_protocol;
+    record_identity_override(model, name, normalized_vendor);
+    if request_target_changed {
+        model
+            .evidence
+            .retain(|item| item.source != EvidenceSource::Probe);
+        let (mut resolved, evidence) =
+            CapabilityResolver::resolve(&model.id, &model.metadata, &model.evidence);
+        if resolved.supports_reasoning && resolved.reasoning_efforts.is_empty() {
+            resolved.reasoning_efforts = previous_capabilities.reasoning_efforts.clone();
+        }
+        model.capabilities = resolved;
+        model.evidence = evidence;
+        if supports_chat {
+            apply_manual_capability_changes(model, &previous_capabilities, &capabilities);
+        }
+    } else if previous_capabilities != capabilities && supports_chat {
+        CapabilityResolver::apply_manual(model, capabilities);
+    } else if previous_capabilities != capabilities {
+        model.capabilities = capabilities;
+    }
+    if !model.capabilities.supports_reasoning {
+        configuration.only_reasoning = false;
+        configuration.reasoning = Default::default();
+    }
     let reasoning_configuration_changed = model.configuration.only_reasoning
         != configuration.only_reasoning
         || model.configuration.reasoning != configuration.reasoning;
     let configuration_changed = model.configuration != configuration;
-    if model.capabilities != input.capabilities {
-        CapabilityResolver::apply_manual(&mut model, input.capabilities);
-    } else {
-        model.updated_at = Utc::now().to_rfc3339();
-    }
+    model.updated_at = Utc::now().to_rfc3339();
     model.name = name.to_string();
-    model.vendor = normalized_vendor;
+    model.vendor = normalized_vendor.to_string();
     if configuration_changed {
         let capability = if reasoning_configuration_changed {
             "reasoningConfiguration"
@@ -338,8 +408,59 @@ pub fn update_model(
         ));
     }
     model.configuration = configuration;
-    state.store.save_model(&model).map_err(CommandError::from)?;
-    Ok(model)
+}
+
+fn apply_manual_capability_changes(
+    model: &mut ManagedModel,
+    previous: &crate::models::CapabilitySet,
+    submitted: &crate::models::CapabilitySet,
+) {
+    let now = Utc::now().to_rfc3339();
+    let changes = [
+        (
+            "toolCall",
+            previous.supports_tool_call != submitted.supports_tool_call,
+            submitted.supports_tool_call,
+        ),
+        (
+            "images",
+            previous.supports_images != submitted.supports_images,
+            submitted.supports_images,
+        ),
+        (
+            "reasoning",
+            previous.supports_reasoning != submitted.supports_reasoning,
+            submitted.supports_reasoning,
+        ),
+    ];
+    let mut applied = false;
+    for (capability, changed, value) in changes {
+        if !changed {
+            continue;
+        }
+        applied = true;
+        model
+            .evidence
+            .retain(|item| item.source != EvidenceSource::Manual || item.capability != capability);
+        model.evidence.push(evidence(
+            capability,
+            value,
+            EvidenceSource::Manual,
+            "User override",
+            &now,
+        ));
+    }
+    if !applied {
+        return;
+    }
+    let reasoning_efforts = model.capabilities.reasoning_efforts.clone();
+    let (mut capabilities, evidence) =
+        CapabilityResolver::resolve(&model.id, &model.metadata, &model.evidence);
+    if capabilities.supports_reasoning && capabilities.reasoning_efforts.is_empty() {
+        capabilities.reasoning_efforts = reasoning_efforts;
+    }
+    model.capabilities = capabilities;
+    model.evidence = evidence;
 }
 
 #[tauri::command]
@@ -521,12 +642,23 @@ fn normalize_model_configuration(
     mut configuration: ModelConfiguration,
     capabilities: &crate::models::CapabilitySet,
 ) -> crate::error::CoreResult<ModelConfiguration> {
+    let normalize_endpoint: fn(&str) -> crate::error::CoreResult<String> =
+        if configuration.use_custom_protocol {
+            normalize_request_url
+        } else {
+            normalize_api_root
+        };
     configuration.endpoint_override = configuration
         .endpoint_override
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .map(|endpoint| normalize_api_root(&endpoint))
+        .map(|endpoint| normalize_endpoint(&endpoint))
         .transpose()?;
+    if configuration.use_custom_protocol && configuration.endpoint_override.is_none() {
+        return Err(crate::error::CoreError::Validation(
+            "Custom protocol requires a complete request URL".to_string(),
+        ));
+    }
     if configuration
         .temperature
         .is_some_and(|temperature| !temperature.is_finite() || temperature < 0.0)
@@ -545,6 +677,15 @@ fn normalize_model_configuration(
     {
         return Err(crate::error::CoreError::Validation(
             "Token limits must be positive safe integers".to_string(),
+        ));
+    }
+    if configuration
+        .reasoning
+        .summary
+        .is_some_and(|summary| !summary.is_supported_target_value())
+    {
+        return Err(crate::error::CoreError::Validation(
+            "Reasoning summary must be auto, concise, or detailed".to_string(),
         ));
     }
 
@@ -645,6 +786,13 @@ fn build_manual_model(
     }
     if !identity_override.is_empty() {
         metadata["everybuddyIdentityOverride"] = Value::Object(identity_override);
+    }
+    if let Some(market_model) = market_model {
+        metadata["everybuddyOpenRouterMatch"] = json!({
+            "source": "openrouter",
+            "modelId": market_model.id,
+            "supportsTextOutput": market_model.supports_chat_configuration(),
+        });
     }
     let (capabilities, evidence) =
         CapabilityResolver::resolve_with_market(id, &metadata, market_model, &[]);
@@ -814,6 +962,184 @@ mod tests {
             )
             .is_err());
         }
+    }
+
+    #[test]
+    fn rejects_legacy_reasoning_summaries_when_saving() {
+        let capabilities = crate::models::CapabilitySet {
+            supports_reasoning: true,
+            ..Default::default()
+        };
+        for summary in [
+            crate::models::ReasoningSummary::Always,
+            crate::models::ReasoningSummary::Never,
+        ] {
+            let mut configuration = ModelConfiguration::default();
+            configuration.reasoning.summary = Some(summary);
+
+            assert!(normalize_model_configuration(configuration, &capabilities).is_err());
+        }
+    }
+
+    #[test]
+    fn custom_protocol_preserves_the_complete_request_url() {
+        assert!(normalize_model_configuration(
+            ModelConfiguration {
+                use_custom_protocol: true,
+                ..Default::default()
+            },
+            &Default::default(),
+        )
+        .is_err());
+
+        let mut configuration = ModelConfiguration {
+            endpoint_override: Some("https://gateway.example/v1/images/generations/".to_string()),
+            use_custom_protocol: true,
+            ..Default::default()
+        };
+
+        configuration = normalize_model_configuration(configuration, &Default::default()).unwrap();
+
+        assert_eq!(
+            configuration.endpoint_override.as_deref(),
+            Some("https://gateway.example/v1/images/generations")
+        );
+    }
+
+    #[test]
+    fn replacing_probe_evidence_removes_stale_positive_results() {
+        let mut model = build_manual_model("gateway", "model", "Model", "custom", None);
+        model.evidence.push(evidence(
+            "images",
+            true,
+            EvidenceSource::Probe,
+            "Old endpoint probe",
+            "2026-08-20T00:00:00Z",
+        ));
+
+        replace_probe_evidence(&mut model, Vec::new());
+
+        assert!(!model
+            .evidence
+            .iter()
+            .any(|item| item.source == EvidenceSource::Probe));
+    }
+
+    #[test]
+    fn non_text_models_ignore_manual_chat_configuration() {
+        let mut model = build_manual_model("gateway", "image-model", "Image", "custom", None);
+        model.metadata = json!({
+            "architecture": { "output_modalities": ["image"] }
+        });
+        let capabilities = crate::models::CapabilitySet {
+            supports_tool_call: true,
+            supports_images: true,
+            supports_reasoning: true,
+            reasoning_efforts: vec!["high".to_string()],
+        };
+        let configuration = ModelConfiguration {
+            max_input_tokens: Some(32_000),
+            max_output_tokens: Some(4_000),
+            temperature: Some(0.7),
+            only_reasoning: true,
+            ..Default::default()
+        };
+
+        apply_model_update(&mut model, capabilities, configuration, "Image", "custom");
+
+        assert_eq!(model.capabilities, Default::default());
+        assert_eq!(model.configuration, Default::default());
+        assert!(!model.evidence.iter().any(|item| {
+            item.source == EvidenceSource::Manual
+                && matches!(
+                    item.capability.as_str(),
+                    "toolCall" | "images" | "reasoning"
+                )
+        }));
+    }
+
+    #[test]
+    fn persisted_catalog_non_text_guard_survives_endpoint_changes() {
+        let mut model = build_manual_model("gateway", "image-model", "Image", "custom", None);
+        model.metadata["everybuddyOpenRouterMatch"] = json!({
+            "source": "openrouter",
+            "modelId": "provider/image-model",
+            "supportsTextOutput": false
+        });
+        model.evidence.push(evidence(
+            "images",
+            true,
+            EvidenceSource::Imported,
+            "Old target import",
+            "2026-08-20T00:00:00Z",
+        ));
+        let mut configuration = model.configuration.clone();
+        configuration.endpoint_override = Some("https://new.example.com/v1".to_string());
+
+        apply_model_update(
+            &mut model,
+            Default::default(),
+            configuration,
+            "Image",
+            "custom",
+        );
+
+        assert_eq!(model.capabilities, Default::default());
+    }
+
+    #[test]
+    fn endpoint_change_drops_probe_evidence_without_turning_old_values_into_manual_overrides() {
+        let mut model = build_manual_model("gateway", "model", "Model", "custom", None);
+        model
+            .evidence
+            .retain(|item| item.source != EvidenceSource::Manual);
+        model.evidence.push(evidence(
+            "images",
+            true,
+            EvidenceSource::Probe,
+            "Old endpoint probe",
+            "2026-08-20T00:00:00Z",
+        ));
+        model.capabilities.supports_images = true;
+        model.evidence.push(evidence(
+            "reasoning",
+            true,
+            EvidenceSource::Probe,
+            "Old endpoint probe",
+            "2026-08-20T00:00:00Z",
+        ));
+        model.capabilities.supports_reasoning = true;
+        model.configuration.only_reasoning = true;
+        model.configuration.reasoning.summary = Some(crate::models::ReasoningSummary::Auto);
+        let mut submitted_capabilities = model.capabilities.clone();
+        submitted_capabilities.supports_tool_call = true;
+        let mut configuration = model.configuration.clone();
+        configuration.endpoint_override = Some("https://new.example.com/v1".to_string());
+
+        apply_model_update(
+            &mut model,
+            submitted_capabilities,
+            configuration,
+            "Model",
+            "custom",
+        );
+
+        assert!(model.capabilities.supports_tool_call);
+        assert!(!model.capabilities.supports_images);
+        assert!(!model.capabilities.supports_reasoning);
+        assert!(!model.configuration.only_reasoning);
+        assert_eq!(model.configuration.reasoning, Default::default());
+        assert!(!model
+            .evidence
+            .iter()
+            .any(|item| item.source == EvidenceSource::Probe));
+        assert!(!model
+            .evidence
+            .iter()
+            .any(|item| { item.source == EvidenceSource::Manual && item.capability == "images" }));
+        assert!(model.evidence.iter().any(|item| {
+            item.source == EvidenceSource::Manual && item.capability == "toolCall" && item.value
+        }));
     }
 
     #[test]

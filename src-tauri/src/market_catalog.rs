@@ -65,11 +65,13 @@ pub struct MarketModel {
     #[serde(default)]
     top_provider: MarketTopProvider,
     #[serde(default)]
-    supported_parameters: Vec<String>,
+    supported_parameters: Option<Vec<String>>,
     #[serde(default)]
     default_parameters: MarketDefaultParameters,
     #[serde(default)]
     reasoning: Option<MarketReasoning>,
+    #[serde(skip)]
+    fallback: Option<Arc<MarketModel>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -82,9 +84,9 @@ struct MarketAliasTarget {
 #[derive(Debug, Clone, Default, Deserialize)]
 struct MarketArchitecture {
     #[serde(default)]
-    input_modalities: Vec<String>,
+    input_modalities: Option<Vec<String>>,
     #[serde(default)]
-    output_modalities: Vec<String>,
+    output_modalities: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -251,6 +253,31 @@ impl MarketCatalogSnapshot {
                 .or_insert_with(|| id.clone());
         }
 
+        let fallback_sources: Vec<_> = by_id
+            .iter()
+            .filter_map(|(id, model)| {
+                fallback_source_id(model, &by_id, &canonical_sources)
+                    .filter(|source_id| source_id != id)
+                    .map(|source_id| (id.clone(), source_id))
+            })
+            .collect();
+        let mut fallback_models = HashMap::new();
+        for (_, source_id) in &fallback_sources {
+            if let Some(source) = by_id.get(source_id) {
+                fallback_models
+                    .entry(source_id.clone())
+                    .or_insert_with(|| Arc::new(source.clone()));
+            }
+        }
+        for (id, source_id) in fallback_sources {
+            let Some(fallback) = fallback_models.get(&source_id).cloned() else {
+                continue;
+            };
+            if let Some(model) = by_id.get_mut(&id) {
+                model.fallback = Some(fallback);
+            }
+        }
+
         Ok(Self {
             by_id,
             canonical_sources,
@@ -279,38 +306,11 @@ impl MarketCatalogSnapshot {
 
     fn find_candidate(&self, id: &str) -> Option<&MarketModel> {
         if let Some(model) = self.by_id.get(id) {
-            return Some(self.capability_source(model));
+            return Some(model);
         }
         self.canonical_sources
             .get(id)
             .and_then(|source_id| self.by_id.get(source_id))
-    }
-
-    fn capability_source<'a>(&'a self, model: &'a MarketModel) -> &'a MarketModel {
-        let target = model
-            .alias_target
-            .as_ref()
-            .map(|target| normalize_model_id(&target.slug))
-            .and_then(|target| {
-                self.by_id.get(&target).or_else(|| {
-                    self.canonical_sources
-                        .get(&target)
-                        .and_then(|source_id| self.by_id.get(source_id))
-                })
-            })
-            .unwrap_or(model);
-
-        target
-            .canonical_slug
-            .as_deref()
-            .map(normalize_model_id)
-            .and_then(|slug| self.canonical_sources.get(&slug))
-            .and_then(|source_id| self.by_id.get(source_id))
-            .or_else(|| {
-                delivery_variant_base(&target.id)
-                    .and_then(|base_id| self.by_id.get(&normalize_model_id(base_id)))
-            })
-            .unwrap_or(target)
     }
 }
 
@@ -329,11 +329,12 @@ impl MarketModel {
                     .and_then(|target| target.name.as_deref())
                     .filter(|name| !name.trim().is_empty())
             })
+            .or_else(|| self.fallback.as_deref().and_then(MarketModel::display_name))
     }
 
     pub fn supports_tool_call(&self) -> bool {
         self.outputs_text()
-            && self.supported_parameters.iter().any(|parameter| {
+            && self.supported_parameters().iter().any(|parameter| {
                 parameter.eq_ignore_ascii_case("tools")
                     || parameter.eq_ignore_ascii_case("tool_choice")
             })
@@ -342,8 +343,7 @@ impl MarketModel {
     pub fn supports_images(&self) -> bool {
         self.outputs_text()
             && self
-                .architecture
-                .input_modalities
+                .input_modalities()
                 .iter()
                 .any(|modality| modality.eq_ignore_ascii_case("image"))
     }
@@ -351,7 +351,7 @@ impl MarketModel {
     pub fn supports_reasoning(&self) -> bool {
         self.outputs_text()
             && (self.has_reasoning_metadata()
-                || self.supported_parameters.iter().any(|parameter| {
+                || self.supported_parameters().iter().any(|parameter| {
                     ["reasoning", "reasoning_effort", "include_reasoning"]
                         .iter()
                         .any(|candidate| parameter.eq_ignore_ascii_case(candidate))
@@ -360,21 +360,44 @@ impl MarketModel {
 
     pub fn max_input_tokens(&self) -> Option<u64> {
         self.outputs_text()
-            .then(|| self.context_length.or(self.top_provider.context_length))
+            .then(|| {
+                self.context_length
+                    .filter(|value| *value > 0)
+                    .or(self.top_provider.context_length)
+                    .filter(|value| *value > 0)
+                    .or_else(|| {
+                        self.fallback
+                            .as_deref()
+                            .and_then(MarketModel::max_input_tokens)
+                    })
+            })
             .flatten()
             .filter(|value| *value > 0)
     }
 
     pub fn max_output_tokens(&self) -> Option<u64> {
         self.outputs_text()
-            .then_some(self.top_provider.max_completion_tokens)
+            .then(|| {
+                self.top_provider
+                    .max_completion_tokens
+                    .filter(|value| *value > 0)
+                    .or_else(|| {
+                        self.fallback
+                            .as_deref()
+                            .and_then(MarketModel::max_output_tokens)
+                    })
+            })
             .flatten()
             .filter(|value| *value > 0)
     }
 
     pub fn temperature(&self) -> Option<f64> {
         self.outputs_text()
-            .then_some(self.default_parameters.temperature)
+            .then(|| {
+                self.default_parameters
+                    .temperature
+                    .or_else(|| self.fallback.as_deref().and_then(MarketModel::temperature))
+            })
             .flatten()
     }
 
@@ -385,6 +408,11 @@ impl MarketModel {
         self.reasoning
             .as_ref()
             .and_then(|reasoning| reasoning.supported_efforts.as_deref())
+            .or_else(|| {
+                self.fallback
+                    .as_deref()
+                    .and_then(MarketModel::supported_reasoning_efforts)
+            })
     }
 
     pub fn default_reasoning_effort(&self) -> Option<&str> {
@@ -394,24 +422,37 @@ impl MarketModel {
         self.reasoning
             .as_ref()
             .and_then(|reasoning| reasoning.default_effort.as_deref())
+            .or_else(|| {
+                self.fallback
+                    .as_deref()
+                    .and_then(MarketModel::default_reasoning_effort)
+            })
     }
 
     pub fn can_disable_thinking(&self) -> Option<bool> {
         if !self.outputs_text() {
             return None;
         }
-        let reasoning = self.reasoning.as_ref()?;
-        reasoning.mandatory.map(|mandatory| !mandatory).or_else(|| {
-            reasoning
-                .supported_efforts
-                .as_ref()
-                .is_some_and(|efforts| {
-                    efforts
-                        .iter()
-                        .any(|effort| effort.eq_ignore_ascii_case("none"))
+        self.reasoning
+            .as_ref()
+            .and_then(|reasoning| {
+                reasoning.mandatory.map(|mandatory| !mandatory).or_else(|| {
+                    reasoning
+                        .supported_efforts
+                        .as_ref()
+                        .is_some_and(|efforts| {
+                            efforts
+                                .iter()
+                                .any(|effort| effort.eq_ignore_ascii_case("none"))
+                        })
+                        .then_some(true)
                 })
-                .then_some(true)
-        })
+            })
+            .or_else(|| {
+                self.fallback
+                    .as_deref()
+                    .and_then(MarketModel::can_disable_thinking)
+            })
     }
 
     fn has_reasoning_metadata(&self) -> bool {
@@ -420,7 +461,10 @@ impl MarketModel {
                 || reasoning.default_enabled.is_some()
                 || reasoning.supported_efforts.is_some()
                 || reasoning.default_effort.is_some()
-        })
+        }) || self
+            .fallback
+            .as_deref()
+            .is_some_and(MarketModel::has_reasoning_metadata)
     }
 
     pub fn supports_chat_configuration(&self) -> bool {
@@ -428,11 +472,68 @@ impl MarketModel {
     }
 
     fn outputs_text(&self) -> bool {
-        self.architecture
-            .output_modalities
+        self.output_modalities()
             .iter()
             .any(|modality| modality.eq_ignore_ascii_case("text"))
     }
+
+    fn input_modalities(&self) -> &[String] {
+        self.architecture
+            .input_modalities
+            .as_deref()
+            .or_else(|| self.fallback.as_deref().map(MarketModel::input_modalities))
+            .unwrap_or_default()
+    }
+
+    fn output_modalities(&self) -> &[String] {
+        self.architecture
+            .output_modalities
+            .as_deref()
+            .or_else(|| self.fallback.as_deref().map(MarketModel::output_modalities))
+            .unwrap_or_default()
+    }
+
+    fn supported_parameters(&self) -> &[String] {
+        self.supported_parameters
+            .as_deref()
+            .or_else(|| {
+                self.fallback
+                    .as_deref()
+                    .map(MarketModel::supported_parameters)
+            })
+            .unwrap_or_default()
+    }
+}
+
+fn fallback_source_id(
+    model: &MarketModel,
+    by_id: &HashMap<String, MarketModel>,
+    canonical_sources: &HashMap<String, String>,
+) -> Option<String> {
+    let target_id = model
+        .alias_target
+        .as_ref()
+        .map(|target| normalize_model_id(&target.slug))
+        .and_then(|target| {
+            by_id
+                .contains_key(&target)
+                .then_some(target.clone())
+                .or_else(|| canonical_sources.get(&target).cloned())
+        })
+        .unwrap_or_else(|| normalize_model_id(&model.id));
+    let target = by_id.get(&target_id)?;
+
+    target
+        .canonical_slug
+        .as_deref()
+        .map(normalize_model_id)
+        .and_then(|slug| canonical_sources.get(&slug).cloned())
+        .or_else(|| {
+            delivery_variant_base(&target.id)
+                .map(normalize_model_id)
+                .filter(|base_id| by_id.contains_key(base_id))
+        })
+        .or_else(|| (target_id != normalize_model_id(&model.id)).then_some(target_id))
 }
 
 pub fn normalize_vendor(value: &str) -> Option<String> {
@@ -598,19 +699,24 @@ mod tests {
             alias_target: None,
             context_length: Some(200_000),
             architecture: MarketArchitecture {
-                input_modalities: input_modalities.iter().map(ToString::to_string).collect(),
-                output_modalities: output_modalities.iter().map(ToString::to_string).collect(),
+                input_modalities: Some(input_modalities.iter().map(ToString::to_string).collect()),
+                output_modalities: Some(
+                    output_modalities.iter().map(ToString::to_string).collect(),
+                ),
             },
             top_provider: MarketTopProvider {
                 context_length: None,
                 max_completion_tokens: Some(32_000),
             },
-            supported_parameters: supported_parameters
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
+            supported_parameters: Some(
+                supported_parameters
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+            ),
             default_parameters: MarketDefaultParameters::default(),
             reasoning: None,
+            fallback: None,
         }
     }
 
@@ -635,19 +741,27 @@ mod tests {
     }
 
     #[test]
-    fn resolves_model_variants_aliases_and_canonical_slugs_to_the_base_record() {
+    fn exact_variants_keep_their_fields_and_only_fall_back_for_missing_fields() {
         let models: Vec<MarketModel> = serde_json::from_value(serde_json::json!([
             {
                 "id": "openai/gpt-5.6-sol",
                 "name": "OpenAI: GPT-5.6 Sol",
                 "canonical_slug": "openai/gpt-5.6-sol-20260709",
-                "architecture": { "output_modalities": ["text"] }
+                "context_length": 1_048_576,
+                "architecture": {
+                    "input_modalities": ["text", "image"],
+                    "output_modalities": ["text"]
+                },
+                "top_provider": { "max_completion_tokens": 131_072 },
+                "supported_parameters": ["tools", "reasoning_effort"]
             },
             {
                 "id": "openai/gpt-5.6-sol:batch",
                 "name": "OpenAI: GPT-5.6 Sol (batch)",
                 "canonical_slug": "openai/gpt-5.6-sol-20260709",
-                "architecture": { "output_modalities": ["text"] }
+                "context_length": 262_144,
+                "architecture": { "output_modalities": ["text"] },
+                "top_provider": { "max_completion_tokens": 32_768 }
             },
             {
                 "id": "openai/gpt-5.6-sol-pro",
@@ -662,25 +776,36 @@ mod tests {
                     "name": "OpenAI: GPT-5.6 Sol",
                     "slug": "openai/gpt-5.6-sol"
                 },
-                "architecture": { "output_modalities": ["text"] }
+                "architecture": { "output_modalities": ["text"] },
+                "top_provider": { "max_completion_tokens": 65_536 }
             }
         ]))
         .unwrap();
         let snapshot = MarketCatalogSnapshot::new(models).unwrap();
 
-        for id in [
-            "gpt-5.6-sol",
-            "openai/gpt-5.6-sol",
-            "openai/gpt-5.6-sol:batch",
-            "openai/gpt-5.6-sol-20260709",
-            "~openai/gpt-latest",
-        ] {
-            assert_eq!(
-                snapshot.find(id, "openai").unwrap().id,
-                "openai/gpt-5.6-sol",
-                "unexpected capability source for {id}"
-            );
-        }
+        let variant = snapshot.find("openai/gpt-5.6-sol:batch", "openai").unwrap();
+        assert_eq!(variant.id, "openai/gpt-5.6-sol:batch");
+        assert_eq!(variant.max_input_tokens(), Some(262_144));
+        assert_eq!(variant.max_output_tokens(), Some(32_768));
+        assert!(variant.supports_tool_call());
+        assert!(variant.supports_images());
+
+        assert_eq!(
+            snapshot
+                .find("openai/gpt-5.6-sol-20260709", "openai")
+                .unwrap()
+                .id,
+            "openai/gpt-5.6-sol"
+        );
+        let alias = snapshot.find("~openai/gpt-latest", "openai").unwrap();
+        assert_eq!(alias.id, "~openai/gpt-latest");
+        assert_eq!(alias.max_input_tokens(), Some(1_048_576));
+        assert_eq!(alias.max_output_tokens(), Some(65_536));
+        assert!(alias.supports_tool_call());
+        assert!(Arc::ptr_eq(
+            variant.fallback.as_ref().unwrap(),
+            alias.fallback.as_ref().unwrap()
+        ));
         assert_eq!(
             snapshot
                 .find("openai/gpt-5.6-sol-pro", "openai")

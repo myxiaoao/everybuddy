@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Cable, LoaderCircle } from "lucide-react";
 import "./App.css";
 import { api } from "./lib/api";
-import { createTranslator } from "./lib/i18n";
+import { createTranslator, type MessageKey } from "./lib/i18n";
 import type {
   AppError,
   AppSettings,
@@ -37,6 +37,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ImportNotice } from "./components/ImportNotice";
+import { ErrorNotice } from "./components/ErrorNotice";
 import { useAppUpdater } from "./hooks/use-app-updater";
 import {
   reportFrontendError,
@@ -49,6 +50,21 @@ import {
   displayTarget,
   isTargetPublishable,
 } from "./lib/target-utils";
+
+type StatusMessage =
+  | { key: MessageKey; values?: Record<string, string | number> }
+  | { text: string };
+
+type DialogKind =
+  | "gateway"
+  | "manualModel"
+  | "probe"
+  | "publish"
+  | "settings"
+  | "backups"
+  | "removeGateway"
+  | "restoreBackup"
+  | "discard";
 
 function App() {
   const [loading, setLoading] = useState(true);
@@ -71,7 +87,9 @@ function App() {
   const [refreshingGatewayIds, setRefreshingGatewayIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const [message, setMessage] = useState("");
+  const [statusMessage, setStatusMessage] = useState<StatusMessage | null>(
+    null,
+  );
   const [error, setError] = useState<AppError | null>(null);
   const [gatewayDialog, setGatewayDialog] = useState(false);
   const [manualModelDialog, setManualModelDialog] = useState(false);
@@ -217,14 +235,14 @@ function App() {
           data.importReport.importedModelCount > 0 ||
           data.importReport.issues.length > 0
         ) {
-          const bootstrapT = createTranslator(data.settings.language);
-          setMessage(
-            bootstrapT("importAnnouncement", {
+          setStatusMessage({
+            key: "importAnnouncement",
+            values: {
               gateways: data.importReport.importedGatewayCount,
               models: data.importReport.importedModelCount,
               issues: data.importReport.issues.length,
-            }),
-          );
+            },
+          });
         }
         const nextSettings = {
           ...data.settings,
@@ -276,7 +294,7 @@ function App() {
     const nextError = asAppError(caught);
     reportFrontendError("application.operation", nextError);
     setError(nextError);
-    setMessage("");
+    setStatusMessage(null);
   }
 
   function runAfterDiscard(action: () => void | Promise<void>) {
@@ -412,7 +430,10 @@ function App() {
         ...current,
         [gatewayId]: "connected",
       }));
-      setMessage(t("modelCount", { count: discovered.length }));
+      setStatusMessage({
+        key: "modelCount",
+        values: { count: discovered.length },
+      });
     } catch (caught) {
       if (refreshGenerationsRef.current.get(gatewayId) !== generation) return;
       setGatewayConnectionStates((current) => ({
@@ -449,7 +470,10 @@ function App() {
       setActiveKey(model.key);
       setManualModelDialog(false);
       setCompactView("details");
-      setMessage(t("manualModelAdded", { name: model.name }));
+      setStatusMessage({
+        key: "manualModelAdded",
+        values: { name: model.name },
+      });
     } catch (caught) {
       showError(caught);
     } finally {
@@ -484,7 +508,10 @@ function App() {
         return next;
       });
       setGatewayToDelete(null);
-      setMessage(t("gatewayRemoved", { name: gateway.name }));
+      setStatusMessage({
+        key: "gatewayRemoved",
+        values: { name: gateway.name },
+      });
     } catch (caught) {
       showError(caught);
     } finally {
@@ -517,7 +544,7 @@ function App() {
       const updated = await api.updateModel(input);
       replaceModel(updated);
       setDirtyModelKey(null);
-      setMessage(t("modelConfigSaved"));
+      setStatusMessage({ key: "modelConfigSaved" });
     } catch (caught) {
       showError(caught);
     } finally {
@@ -532,7 +559,11 @@ function App() {
       const summary = await api.probeModel(activeModel.key);
       replaceModel(summary.model);
       setProbeDialog(false);
-      setMessage(summary.notes.length ? summary.notes.join(" ") : t("probe"));
+      setStatusMessage(
+        summary.notes.length
+          ? { text: summary.notes.join(" ") }
+          : { key: "probe" },
+      );
     } catch (caught) {
       showError(caught);
     } finally {
@@ -602,7 +633,9 @@ function App() {
         acceptConflicts,
       );
       setPublishResult(result);
-      setMessage(result.success ? t("published") : t("publishFailed"));
+      setStatusMessage({
+        key: result.success ? "published" : "publishFailed",
+      });
       await loadTargets();
       if (result.success) {
         clearSelectionOverrides(
@@ -648,7 +681,7 @@ function App() {
     setBusy(true);
     try {
       await api.restoreBackup(backup.id);
-      setMessage(t("restore"));
+      setStatusMessage({ key: "restore" });
       setBackups(await api.listBackups());
       const previousKeys =
         targetModelStates.find((state) => state.target === backup.target)
@@ -699,6 +732,32 @@ function App() {
     : false;
   const localizedErrorMessage = error ? localizedError(error, t) : null;
   const locale = settings.language === "zh-CN" ? "zh-CN" : "en-US";
+  const message = statusMessage
+    ? "key" in statusMessage
+      ? t(statusMessage.key, statusMessage.values)
+      : statusMessage.text
+    : "";
+  const dialogStates: Array<{ kind: DialogKind; open: boolean }> = [
+    { kind: "discard", open: discardDialog },
+    { kind: "restoreBackup", open: Boolean(backupToRestore) },
+    { kind: "removeGateway", open: Boolean(gatewayToDelete) },
+    { kind: "backups", open: backupsDialog },
+    { kind: "settings", open: settingsDialog },
+    { kind: "publish", open: publishDialog },
+    { kind: "probe", open: probeDialog },
+    { kind: "manualModel", open: manualModelDialog },
+    { kind: "gateway", open: gatewayDialog },
+  ];
+  const activeDialog = dialogStates.find(({ open }) => open)?.kind ?? null;
+  const errorNotice = localizedErrorMessage
+    ? {
+        ...localizedErrorMessage,
+        dismissLabel: t("close"),
+        onDismiss: () => setError(null),
+      }
+    : undefined;
+  const dialogErrorNotice = (dialog: DialogKind) =>
+    activeDialog === dialog ? errorNotice : undefined;
 
   return (
     <TooltipProvider delayDuration={350}>
@@ -818,20 +877,7 @@ function App() {
         <div className="live-region" role="status" aria-live="polite">
           {message}
         </div>
-        {localizedErrorMessage && error?.code !== "DESKTOP_REQUIRED" ? (
-          <div className="error-toast" role="alert">
-            <strong>{localizedErrorMessage.title}</strong>
-            <span>{localizedErrorMessage.message}</span>
-            <small>{localizedErrorMessage.recovery}</small>
-            <Button
-              variant="ghost"
-              type="button"
-              onClick={() => setError(null)}
-            >
-              {t("close")}
-            </Button>
-          </div>
-        ) : null}
+        {errorNotice && !activeDialog ? <ErrorNotice {...errorNotice} /> : null}
         {availableUpdate ? (
           <div className="update-banner" role="status">
             <span>
@@ -857,6 +903,7 @@ function App() {
             gateway={editingGateway}
             initialToken={editingGatewayToken}
             t={t}
+            errorNotice={dialogErrorNotice("gateway")}
             onClose={closeGatewayDialog}
             onSubmit={(input) => void saveGateway(input)}
           />
@@ -867,6 +914,7 @@ function App() {
             busy={busy}
             gateway={selectedGateway}
             t={t}
+            errorNotice={dialogErrorNotice("manualModel")}
             onClose={() => setManualModelDialog(false)}
             onSubmit={(input) => void saveManualModel(input)}
           />
@@ -876,6 +924,7 @@ function App() {
             open
             busy={busy}
             t={t}
+            errorNotice={dialogErrorNotice("probe")}
             onClose={() => setProbeDialog(false)}
             onConfirm={() => void runProbe()}
           />
@@ -887,6 +936,7 @@ function App() {
             preview={publishPreview}
             result={publishResult}
             t={t}
+            errorNotice={dialogErrorNotice("publish")}
             onClose={() => setPublishDialog(false)}
             onConfirm={(accepted) => void executePublish(accepted)}
           />
@@ -901,6 +951,7 @@ function App() {
             updateCheckStatus={updateCheckStatus}
             installingUpdate={installingUpdate}
             t={t}
+            errorNotice={dialogErrorNotice("settings")}
             onClose={() => setSettingsDialog(false)}
             onSubmit={(next) => void saveSettings(next)}
             onCheckForUpdates={() => void checkForUpdates()}
@@ -914,6 +965,7 @@ function App() {
             backups={backups}
             locale={locale}
             t={t}
+            errorNotice={dialogErrorNotice("backups")}
             onClose={() => setBackupsDialog(false)}
             onRestore={setBackupToRestore}
           />
@@ -929,6 +981,7 @@ function App() {
             })}
             confirmLabel={t("deleteGatewayAction")}
             t={t}
+            errorNotice={dialogErrorNotice("removeGateway")}
             onClose={() => setGatewayToDelete(null)}
             onConfirm={() => void removeGateway(gatewayToDelete)}
           />
@@ -944,6 +997,7 @@ function App() {
             })}
             confirmLabel={t("restoreBackupAction")}
             t={t}
+            errorNotice={dialogErrorNotice("restoreBackup")}
             onClose={() => setBackupToRestore(null)}
             onConfirm={() => void restoreBackup(backupToRestore)}
           />
@@ -959,6 +1013,7 @@ function App() {
             })}
             confirmLabel={t("discardChangesAction")}
             t={t}
+            errorNotice={dialogErrorNotice("discard")}
             onClose={cancelDiscard}
             onConfirm={discardChanges}
           />

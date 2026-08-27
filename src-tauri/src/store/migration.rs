@@ -1,12 +1,13 @@
 use std::path::Path;
 
 use chrono::Utc;
-use rusqlite::{Connection, DatabaseName};
+use rusqlite::{params, Connection, DatabaseName, Transaction};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::error::{CoreError, CoreResult};
 
-pub(super) const SCHEMA_VERSION: i64 = 2;
+pub(super) const SCHEMA_VERSION: i64 = 3;
 
 pub(super) fn migrate(
     connection: &mut Connection,
@@ -115,8 +116,48 @@ pub(super) fn migrate(
             [],
         )?;
     }
+    if current_version < 3 {
+        invalidate_legacy_custom_protocol_urls(&transaction)?;
+    }
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;
+    Ok(())
+}
+
+fn invalidate_legacy_custom_protocol_urls(transaction: &Transaction<'_>) -> CoreResult<()> {
+    let configurations = {
+        let mut statement =
+            transaction.prepare("SELECT model_key, configuration_json FROM models")?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    let updated_at = Utc::now().to_rfc3339();
+    for (model_key, raw_configuration) in configurations {
+        let mut configuration: Value =
+            serde_json::from_str(&raw_configuration).map_err(|error| {
+                CoreError::Storage(format!(
+                    "Could not migrate model configuration for {model_key}: {error}"
+                ))
+            })?;
+        let Some(object) = configuration.as_object_mut() else {
+            return Err(CoreError::Storage(format!(
+                "Could not migrate model configuration for {model_key}: expected a JSON object"
+            )));
+        };
+        if object.get("useCustomProtocol").and_then(Value::as_bool) != Some(true)
+            || object.remove("endpointOverride").is_none()
+        {
+            continue;
+        }
+        transaction.execute(
+            "UPDATE models SET configuration_json = ?1, updated_at = ?2 WHERE model_key = ?3",
+            params![configuration.to_string(), updated_at, model_key],
+        )?;
+    }
     Ok(())
 }
 

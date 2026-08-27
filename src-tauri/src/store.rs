@@ -896,6 +896,54 @@ mod tests {
     }
 
     #[test]
+    fn migration_requires_legacy_custom_protocol_urls_to_be_reentered() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("legacy-custom-protocol.db");
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE models (
+                    model_key TEXT PRIMARY KEY,
+                    gateway_id TEXT NOT NULL,
+                    upstream_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    vendor TEXT NOT NULL,
+                    capabilities_json TEXT NOT NULL,
+                    configuration_json TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                INSERT INTO models VALUES (
+                    'gateway::custom', 'gateway', 'custom', 'Custom', 'custom', '{}',
+                    '{"endpointOverride":"https://gateway.example/v1","useCustomProtocol":true,"futureOption":"preserved"}',
+                    '[]', '{}', '2026-08-20T00:00:00Z'
+                );
+                PRAGMA user_version = 2;
+                "#,
+            )
+            .unwrap();
+        drop(connection);
+
+        let store = Store::open(&path).unwrap();
+        let raw_configuration: String = store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT configuration_json FROM models WHERE model_key = 'gateway::custom'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let configuration: serde_json::Value = serde_json::from_str(&raw_configuration).unwrap();
+
+        assert!(configuration.get("endpointOverride").is_none());
+        assert_eq!(configuration["useCustomProtocol"], json!(true));
+        assert_eq!(configuration["futureOption"], json!("preserved"));
+    }
+
+    #[test]
     fn rejects_database_from_a_newer_app_version() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("future.db");

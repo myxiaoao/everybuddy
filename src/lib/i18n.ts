@@ -30,11 +30,14 @@ const messages = {
       "添加到 {gateway}。保存时只查询 OpenRouter 公共模型目录，不调用模型，也不会产生 Token 费用。",
     addModel: "添加模型",
     manualModelId: "Model ID",
-    manualModelIdHint: "必须与 /chat/completions 请求中的 model 值完全一致。",
+    manualModelIdHint:
+      "填写协议实际使用的 model 值；标准 OpenAI-compatible 接口中，对应 /chat/completions 请求的 model 字段。",
     manualModelName: "显示名称（可选）",
     manualModelNamePlaceholder: "默认使用 Model ID",
     manualModelVendor: "提供商（可选）",
-    manualModelVendorPlaceholder: "由 OpenRouter 识别，未知时使用 custom",
+    manualModelVendorPlaceholder: "custom",
+    manualModelVendorHint:
+      "留空时使用 OpenRouter 匹配的提供商；无法识别时默认为 custom。",
     manualModelBadge: "手动",
     importedModelBadge: "已导入",
     manualModelAdded: "已添加模型 {name}",
@@ -80,7 +83,7 @@ const messages = {
     evidenceMetadata: "API metadata",
     evidenceOpenRouter: "OpenRouter 模型目录",
     evidenceImported: "目标配置导入",
-    evidenceProbe: "主动 Probe",
+    evidenceProbe: "主动探测",
     evidenceManual: "人工覆盖",
     saveCapabilities: "保存能力",
     advancedModelConfig: "高级配置",
@@ -95,7 +98,8 @@ const messages = {
     providerDefaultPlaceholder: "使用提供商默认值",
     temperature: "Temperature",
     customProtocol: "自定义协议",
-    customProtocolHint: "直接使用请求地址，不自动追加 /chat/completions。",
+    customProtocolHint:
+      "启用后必须填写完整请求地址；不会自动追加 /chat/completions，且不支持主动探测。",
     reasoningConfig: "思考配置",
     onlyReasoning: "仅思考模式",
     onlyReasoningHint: "模型选择器只显示思考开关，不显示强度选择。",
@@ -110,7 +114,8 @@ const messages = {
     automatic: "自动（使用请求层默认值）",
     notSet: "不设置",
     reasoningSummary: "思考摘要",
-    reasoningSummaryHint: "此字段存在两套兼容枚举，请按接口实际行为选择。",
+    reasoningSummaryHint:
+      "WorkBuddy 和 CodeBuddy 当前支持 auto、concise、detailed；旧值需重新选择后保存。",
     effort_minimal: "最低",
     effort_low: "低",
     effort_medium: "中",
@@ -120,12 +125,11 @@ const messages = {
     summary_auto: "自动",
     summary_concise: "简洁",
     summary_detailed: "详细",
-    summary_always: "始终（SDK）",
-    summary_never: "从不（SDK）",
     saveModelConfig: "保存模型配置",
     modelConfigSaved: "模型配置已保存",
-    probe: "主动 Probe",
-    probeTitle: "执行能力 Probe",
+    probe: "主动探测",
+    probeTitle: "执行能力探测",
+    probeUnavailableCustomProtocol: "自定义协议模式不支持主动探测",
     probeBody:
       "将向 /v1/chat/completions 发送 3 个最小请求，分别检查工具调用、图片输入和推理模式。请求可能产生少量 Token 费用。",
     runProbe: "执行 3 个请求",
@@ -309,12 +313,14 @@ const messages = {
       "Add this model to {gateway}. Saving only checks OpenRouter's public model catalog; it does not call the model or consume tokens.",
     addModel: "Add model",
     manualModelId: "Model ID",
-    manualModelIdHint: "Enter the exact model value used by /chat/completions.",
+    manualModelIdHint:
+      "Enter the model value used by the protocol. For standard OpenAI-compatible endpoints, this is the model field in the /chat/completions request.",
     manualModelName: "Display name (optional)",
     manualModelNamePlaceholder: "Defaults to the Model ID",
     manualModelVendor: "Vendor (optional)",
-    manualModelVendorPlaceholder:
-      "Resolved by OpenRouter, or custom when unknown",
+    manualModelVendorPlaceholder: "custom",
+    manualModelVendorHint:
+      "Leave blank to use the vendor matched by OpenRouter; unknown vendors default to custom.",
     manualModelBadge: "Manual",
     importedModelBadge: "Imported",
     manualModelAdded: "Added model {name}",
@@ -378,7 +384,7 @@ const messages = {
     temperature: "Temperature",
     customProtocol: "Custom protocol",
     customProtocolHint:
-      "Use the endpoint as-is without appending /chat/completions.",
+      "Enter a complete request URL. The app will not append /chat/completions, and active probing is unavailable.",
     reasoningConfig: "Reasoning configuration",
     onlyReasoning: "Reasoning only",
     onlyReasoningHint:
@@ -399,7 +405,7 @@ const messages = {
     notSet: "Not set",
     reasoningSummary: "Reasoning summary",
     reasoningSummaryHint:
-      "This field has two compatible enum sets. Match the value to your endpoint behavior.",
+      "Current WorkBuddy and CodeBuddy runtimes support auto, concise, and detailed. Legacy values must be replaced before saving.",
     effort_minimal: "Minimal",
     effort_low: "Low",
     effort_medium: "Medium",
@@ -409,12 +415,12 @@ const messages = {
     summary_auto: "Auto",
     summary_concise: "Concise",
     summary_detailed: "Detailed",
-    summary_always: "Always (SDK)",
-    summary_never: "Never (SDK)",
     saveModelConfig: "Save model configuration",
     modelConfigSaved: "Model configuration saved",
-    probe: "Active probe",
+    probe: "Run probe",
     probeTitle: "Run capability probe",
+    probeUnavailableCustomProtocol:
+      "Active probing is unavailable for custom protocol endpoints",
     probeBody:
       "EveryBuddy will send 3 minimal /v1/chat/completions requests for Tool Call, Vision, and Reasoning. These requests may consume a small number of tokens.",
     runProbe: "Run 3 requests",
@@ -609,8 +615,45 @@ const messages = {
 
 export type MessageKey = keyof (typeof messages)["zh-CN"];
 
+type MessageValues = Record<string, string | number>;
+
+function countPhrase(
+  values: MessageValues,
+  name: string,
+  singular: string,
+  plural: string,
+) {
+  const value = values[name] ?? 0;
+  return `${value} ${Number(value) === 1 ? singular : plural}`;
+}
+
+const englishCountMessages: Partial<
+  Record<MessageKey, (values: MessageValues) => string>
+> = {
+  selectedTargetsCount: (values) =>
+    `${countPhrase(values, "count", "target", "targets")} selected`,
+  publishScope: (values) =>
+    `${countPhrase(values, "models", "model", "models")} → ${countPhrase(values, "targets", "target", "targets")}`,
+  confirmPublish: (values) =>
+    `Publish to ${countPhrase(values, "count", "target", "targets")}`,
+  importSucceeded: (values) =>
+    `Imported ${countPhrase(values, "gateways", "API", "APIs")} and ${countPhrase(values, "models", "model", "models")} from target configuration.`,
+  importAnnouncement: (values) =>
+    `Startup configuration recovery completed: imported ${countPhrase(values, "gateways", "API", "APIs")} and ${countPhrase(values, "models", "model", "models")}, with ${countPhrase(values, "issues", "configuration item", "configuration items")} needing attention.`,
+  importNoticeSummary: (values) => {
+    const count = values.count ?? 0;
+    return Number(count) === 1
+      ? "1 configuration item was skipped or differs between targets."
+      : `${count} configuration items were skipped or differ between targets.`;
+  },
+};
+
 export function createTranslator(language: Language) {
-  return (key: MessageKey, values?: Record<string, string | number>) => {
+  return (key: MessageKey, values?: MessageValues) => {
+    const countMessage =
+      language === "en" ? englishCountMessages[key] : undefined;
+    if (countMessage) return countMessage(values ?? {});
+
     let message: string = messages[language][key];
     for (const [name, value] of Object.entries(values ?? {})) {
       message = message.replace(`{${name}}`, String(value));

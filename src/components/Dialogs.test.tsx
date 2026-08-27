@@ -9,9 +9,39 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTranslator } from "../lib/i18n";
 import { defaultSettings } from "../lib/target-utils";
 import type { PublishResult } from "../types";
-import { PublishDialog, SettingsDialog } from "./Dialogs";
+import { ManualModelDialog, PublishDialog, SettingsDialog } from "./Dialogs";
 
 afterEach(() => cleanup());
+
+describe("ManualModelDialog", () => {
+  it("keeps vendor resolution guidance visible and associated with the field", () => {
+    render(
+      <ManualModelDialog
+        open
+        busy={false}
+        gateway={{
+          id: "gateway-1",
+          name: "Gateway",
+          apiRoot: "https://api.example.com/v1",
+          tokenRef: "credential-1",
+          createdAt: "2026-08-27T00:00:00Z",
+          updatedAt: "2026-08-27T00:00:00Z",
+        }}
+        t={createTranslator("en")}
+        onClose={() => undefined}
+        onSubmit={() => undefined}
+      />,
+    );
+
+    const vendor = screen.getByRole("textbox", { name: /Vendor/ });
+    const hintId = vendor.getAttribute("aria-describedby");
+    expect(vendor).toHaveAttribute("placeholder", "custom");
+    expect(hintId).toBeTruthy();
+    expect(document.getElementById(hintId ?? "")).toHaveTextContent(
+      "Leave blank to use the vendor matched by OpenRouter; unknown vendors default to custom.",
+    );
+  });
+});
 
 describe("PublishDialog", () => {
   it("distinguishes rolled back and failed targets", () => {

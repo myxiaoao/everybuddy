@@ -73,6 +73,12 @@ pub enum ReasoningSummary {
     Detailed,
 }
 
+impl ReasoningSummary {
+    pub fn is_supported_target_value(self) -> bool {
+        matches!(self, Self::Auto | Self::Concise | Self::Detailed)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ReasoningConfiguration {
@@ -320,6 +326,7 @@ pub struct TargetPreview {
     pub add_count: usize,
     pub update_count: usize,
     pub unchanged_count: usize,
+    pub remove_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

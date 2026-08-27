@@ -47,7 +47,7 @@ jobs:
             exit 1
           fi
   build:
-    name: Build unsigned alpha (${{ matrix.name }})
+    name: Build unsigned release (${{ matrix.name }})
     needs: preflight
     environment: release
     permissions:
@@ -117,7 +117,7 @@ jobs:
           TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
         run: node scripts/prepare-release-config.mjs
 
-      - name: Build updater-signed unsigned alpha assets
+      - name: Build updater-signed release assets
         if: github.event_name == 'push'
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
@@ -128,11 +128,22 @@ jobs:
           tagName: v__VERSION__
           releaseName: EveryBuddy v__VERSION__
           releaseBody: |
-            EveryBuddy 0.1 is an unsigned alpha release for testing.
-            macOS Gatekeeper and Windows SmartScreen may show an unverified publisher warning.
-            Download only from this repository and verify SHA256SUMS.txt before installation.
+            EveryBuddy 0.1.0 is the first stable release.
+
+            ## Highlights
+
+            - Model capabilities now prefer gateway metadata, use exact OpenRouter matches, and keep non-text models out of chat configuration.
+            - WorkBuddy and CodeBuddy publishing now removes unselected models managed by the same API source while preserving unrelated local entries.
+            - Dialog errors stay with the active task, unsaved edits are preserved, and Chinese and English copy is more consistent.
+            - The workspace, target icons, and macOS Dock icon now align and render consistently.
+
+            ## Unsigned Installers
+
+            The macOS and Windows installers are not platform-signed. macOS Gatekeeper and Windows SmartScreen may show an unverified publisher warning.
+
+            Download only from this repository and verify the files against `SHA256SUMS.txt` before installation. Updater assets are signed with a Tauri Ed25519 key.
           releaseDraft: true
-          prerelease: true
+          prerelease: false
           uploadUpdaterJson: true
           args: --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json --ci
 

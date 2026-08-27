@@ -121,7 +121,12 @@ export function InspectorPanel({
                 size="sm"
                 type="button"
                 onClick={onProbe}
-                disabled={busy}
+                disabled={busy || configuration.useCustomProtocol}
+                title={
+                  configuration.useCustomProtocol
+                    ? t("probeUnavailableCustomProtocol")
+                    : undefined
+                }
               >
                 <Sparkles aria-hidden="true" size={16} />
                 {t("probe")}
@@ -381,13 +386,17 @@ const reasoningEfforts: ReasoningEffort[] = [
   "xhigh",
   "max",
 ];
-const reasoningSummaries: ReasoningSummary[] = [
+const reasoningSummaries = [
   "auto",
   "concise",
   "detailed",
-  "always",
-  "never",
-];
+] as const satisfies readonly ReasoningSummary[];
+
+function isEditableReasoningSummary(
+  summary: ReasoningSummary,
+): summary is (typeof reasoningSummaries)[number] {
+  return (reasoningSummaries as readonly ReasoningSummary[]).includes(summary);
+}
 
 function emptyReasoningConfiguration(): ModelConfiguration["reasoning"] {
   return {
@@ -512,6 +521,11 @@ function ReasoningFields({
 }) {
   const effortGroupId = useId();
   const effortHintId = `${effortGroupId}-hint`;
+  const summaryValue =
+    configuration.reasoning.summary &&
+    isEditableReasoningSummary(configuration.reasoning.summary)
+      ? configuration.reasoning.summary
+      : "";
   const updateReasoning = (reasoning: ModelConfiguration["reasoning"]) => {
     onChange({ ...configuration, reasoning });
   };
@@ -627,7 +641,7 @@ function ReasoningFields({
       >
         <select
           className="model-config-select"
-          value={configuration.reasoning.summary ?? ""}
+          value={summaryValue}
           onChange={(event) =>
             updateReasoning({
               ...configuration.reasoning,
@@ -764,8 +778,8 @@ const sourceOrder = [
   "manual",
   "probe",
   "imported",
-  "openRouter",
   "metadata",
+  "openRouter",
   "default",
 ] as const;
 

@@ -22,6 +22,9 @@ pub struct GatewayClient {
 
 const MAX_GATEWAY_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_DISCOVERED_MODELS: usize = 10_000;
+const VISION_PROBE_ANSWER: &str = "MAGENTA-GREEN-BLUE-YELLOW";
+const VISION_PROBE_PROMPT: &str = "Identify the four vertical color bars from left to right. Reply with the uppercase English color names separated by hyphens and no other text.";
+const VISION_PROBE_IMAGE: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAZAAAABkCAIAAAAnqfEgAAABGUlEQVR42u3UwQ0AMAwCsaT770xW4F3ZIyB0m8nQ2awR+rFsUIpf1Z4JAMECECxAsAAEC0CwAMECECwAwQIEC0CwAAQLECwAwQIQLECwAAQLQLAAwQIQLADBAgQLQLAABAsQLADBAhAsQLAABAsQLADBAhAsQLAABAtAsADBAhAsAMECBAtAsAAECxAsAMECECxAsAAEC0CwAMECECwAwQIEC0CwAAQLECwAwQIQLECwAAQLECwAwQIQLECwAAQLQLAAwQIQLADBAgQLQLAABAsQLADBAhAsQLAABAtAsADBAhAsAMECBAtAsAAECxAsAMECECxAsAAECxAsAMECECxAsAAEC0CwAMECECwAwQIEC0CwAAQL+NcBXj0Gxh/r9KAAAAAASUVORK5CYII=";
 
 impl GatewayClient {
     pub fn new(market_cache_path: Option<PathBuf>) -> CoreResult<Self> {
@@ -103,7 +106,8 @@ impl GatewayClient {
                                     EvidenceSource::Imported
                                         | EvidenceSource::Probe
                                         | EvidenceSource::Manual
-                                )
+                                ) || (market_catalog.is_none()
+                                    && item.source == EvidenceSource::OpenRouter)
                             })
                             .cloned()
                             .collect()
@@ -121,17 +125,44 @@ impl GatewayClient {
                     .unwrap_or(inferred_vendor);
                 let identity_override = existing_model
                     .and_then(|model| model.metadata.get("everybuddyIdentityOverride"));
+                let existing_market_match = existing_model
+                    .and_then(|model| model.metadata.get("everybuddyOpenRouterMatch"));
+                let mut metadata = object_without_secret(item);
+                if let Some(object) = metadata.as_object_mut() {
+                    object.remove("everybuddyOpenRouterMatch");
+                    if let Some(market_model) = market_model {
+                        object.insert(
+                            "everybuddyOpenRouterMatch".to_string(),
+                            json!({
+                                "source": "openrouter",
+                                "modelId": market_model.id,
+                                "supportsTextOutput": market_model.supports_chat_configuration(),
+                            }),
+                        );
+                    } else if market_catalog.is_none() {
+                        if let Some(existing_market_match) = existing_market_match {
+                            object.insert(
+                                "everybuddyOpenRouterMatch".to_string(),
+                                existing_market_match.clone(),
+                            );
+                        }
+                    }
+                }
                 let (name, vendor) =
                     resolved_identity(identity_override, discovered_name, discovered_vendor);
                 let (capabilities, evidence) = CapabilityResolver::resolve_with_market(
                     id,
-                    item,
+                    &metadata,
                     market_model,
                     &preserved_evidence,
                 );
-                let configuration =
-                    discovered_configuration(existing_model, id, item, market_model, &capabilities);
-                let mut metadata = object_without_secret(item);
+                let configuration = discovered_configuration(
+                    existing_model,
+                    id,
+                    &metadata,
+                    market_model,
+                    &capabilities,
+                );
                 if let Some(source) = existing_model
                     .and_then(|model| model.metadata.get("everybuddySource"))
                     .and_then(Value::as_str)
@@ -148,17 +179,6 @@ impl GatewayClient {
                         );
                     }
                 }
-                if let (Some(object), Some(market_model)) = (metadata.as_object_mut(), market_model)
-                {
-                    object.insert(
-                        "everybuddyOpenRouterMatch".to_string(),
-                        json!({
-                            "source": "openrouter",
-                            "modelId": market_model.id,
-                        }),
-                    );
-                }
-
                 Ok(ManagedModel {
                     key,
                     gateway_id: profile.id.clone(),
@@ -189,6 +209,11 @@ impl GatewayClient {
         token: &str,
         model: &ManagedModel,
     ) -> CoreResult<(Vec<crate::models::CapabilityEvidence>, Vec<String>)> {
+        if model.configuration.use_custom_protocol {
+            return Err(CoreError::Validation(
+                "Capability probing is unavailable for custom protocol endpoints".to_string(),
+            ));
+        }
         let api_root = normalize_api_root(
             model
                 .configuration
@@ -235,7 +260,7 @@ impl GatewayClient {
                     ));
                 } else {
                     notes.push(
-                        "Tool probe completed without a tool call; existing evidence was kept"
+                        "Tool probe completed without a tool call; other evidence was kept"
                             .to_string(),
                     );
                 }
@@ -248,20 +273,28 @@ impl GatewayClient {
             "messages": [{
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "Reply with one word describing this image."},
-                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="}}
+                    {
+                        "type": "text",
+                        "text": VISION_PROBE_PROMPT
+                    },
+                    {"type": "image_url", "image_url": {"url": VISION_PROBE_IMAGE}}
                 ]
             }],
-            "max_tokens": 4
+            "temperature": 0,
+            "max_tokens": 24
         });
         match self.probe_request(&url, token, image_body).await {
-            Ok(_) => results.push(evidence(
-                "images",
-                true,
-                EvidenceSource::Probe,
-                "Image input accepted",
-                &now,
-            )),
+            Ok(body) if has_expected_vision_answer(&body) => results.push(evidence(
+                    "images",
+                    true,
+                    EvidenceSource::Probe,
+                    "Vision challenge answered correctly",
+                    &now,
+                )),
+            Ok(_) => notes.push(
+                "Image probe: request succeeded without the expected visual answer; other evidence was kept"
+                    .to_string(),
+            ),
             Err(error) => notes.push(format!("Image probe: {error}")),
         }
 
@@ -279,7 +312,7 @@ impl GatewayClient {
                     .is_some_and(|tokens| tokens > 0)
                     || body
                         .pointer("/choices/0/message/reasoning_content")
-                        .is_some();
+                        .is_some_and(has_non_empty_content);
                 if has_reasoning {
                     results.push(evidence(
                         "reasoning",
@@ -289,7 +322,7 @@ impl GatewayClient {
                         &now,
                     ));
                 } else {
-                    notes.push("Reasoning parameter was accepted without verifiable reasoning output; existing evidence was kept".to_string());
+                    notes.push("Reasoning parameter was accepted without verifiable reasoning output; other evidence was kept".to_string());
                 }
             }
             Err(error) => notes.push(format!("Reasoning probe: {error}")),
@@ -316,6 +349,24 @@ impl GatewayClient {
         let bytes = read_response_body(response, "The probe response").await?;
         serde_json::from_slice(&bytes)
             .map_err(|_| CoreError::Protocol("Response is not valid JSON".to_string()))
+    }
+}
+
+fn has_expected_vision_answer(body: &Value) -> bool {
+    body.pointer("/choices/0/message/content")
+        .and_then(Value::as_str)
+        .is_some_and(|content| content.trim() == VISION_PROBE_ANSWER)
+}
+
+fn has_non_empty_content(value: &Value) -> bool {
+    match value {
+        Value::String(content) => !content.trim().is_empty(),
+        Value::Array(items) => items.iter().any(has_non_empty_content),
+        Value::Object(object) => ["text", "content", "summary", "reasoning", "thinking"]
+            .iter()
+            .filter_map(|field| object.get(*field))
+            .any(has_non_empty_content),
+        _ => false,
     }
 }
 
@@ -424,9 +475,9 @@ fn discover_from_body(body: &str, token: &str) -> CoreResult<Value> {
     parse_discovery_body(body.as_bytes(), token)
 }
 
-pub fn normalize_api_root(input: &str) -> CoreResult<String> {
+fn parse_http_url(input: &str) -> CoreResult<Url> {
     let trimmed = input.trim().trim_end_matches('/');
-    let mut url = Url::parse(trimmed)
+    let url = Url::parse(trimmed)
         .map_err(|_| CoreError::Validation("Enter a valid HTTP or HTTPS API URL".to_string()))?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(CoreError::Validation(
@@ -456,6 +507,19 @@ pub fn normalize_api_root(input: &str) -> CoreResult<String> {
             "Gateway URLs cannot contain a query or fragment".to_string(),
         ));
     }
+
+    Ok(url)
+}
+
+pub fn normalize_request_url(input: &str) -> CoreResult<String> {
+    let mut url = parse_http_url(input)?;
+    let path = url.path().trim_end_matches('/').to_string();
+    url.set_path(if path.is_empty() { "/" } else { &path });
+    Ok(url.to_string().trim_end_matches('/').to_string())
+}
+
+pub fn normalize_api_root(input: &str) -> CoreResult<String> {
+    let mut url = parse_http_url(input)?;
 
     let path = url.path().trim_end_matches('/');
     let normalized_path = if path.ends_with("/v1/models") {
@@ -583,6 +647,10 @@ mod tests {
             normalize_api_root("https://example.com/api").unwrap(),
             "https://example.com/api/v1"
         );
+        assert_eq!(
+            normalize_request_url("https://example.com/v1/images/generations/").unwrap(),
+            "https://example.com/v1/images/generations"
+        );
     }
 
     #[test]
@@ -689,6 +757,38 @@ mod tests {
     }
 
     #[test]
+    fn vision_probe_requires_the_exact_challenge_answer() {
+        assert!(!VISION_PROBE_PROMPT.contains(VISION_PROBE_ANSWER));
+        assert!(has_expected_vision_answer(&json!({
+            "choices": [{"message": {"content": "MAGENTA-GREEN-BLUE-YELLOW\n"}}]
+        })));
+        assert!(!has_expected_vision_answer(&json!({
+            "choices": [{"message": {"content": "The image contains four colors."}}]
+        })));
+        assert!(!has_expected_vision_answer(&json!({
+            "choices": [{"message": {}}]
+        })));
+    }
+
+    #[test]
+    fn reasoning_probe_requires_non_empty_content() {
+        for value in [
+            json!(null),
+            json!(""),
+            json!("  "),
+            json!([]),
+            json!({}),
+            json!({"type": "reasoning", "text": ""}),
+            json!({"status": "empty"}),
+        ] {
+            assert!(!has_non_empty_content(&value));
+        }
+        assert!(has_non_empty_content(&json!("reasoning")));
+        assert!(has_non_empty_content(&json!([{"text": "reasoning"}])));
+        assert!(has_non_empty_content(&json!({"thinking": "reasoning"})));
+    }
+
+    #[test]
     fn probe_uses_the_model_endpoint_override() {
         let server = Server::http("127.0.0.1:0").unwrap();
         let address = server.server_addr().to_string();
@@ -729,14 +829,55 @@ mod tests {
             updated_at: "2026-08-20T00:00:00Z".to_string(),
         };
 
-        tauri::async_runtime::block_on(GatewayClient::new(None).unwrap().probe(
+        let (evidence, notes) = tauri::async_runtime::block_on(
+            GatewayClient::new(None)
+                .unwrap()
+                .probe(&profile, "test-token", &model),
+        )
+        .unwrap();
+
+        server_thread.join().unwrap();
+        assert!(!evidence
+            .iter()
+            .any(|item| item.capability == "images" && item.value));
+        assert!(notes.iter().any(|note| note.starts_with("Image probe:")));
+    }
+
+    #[test]
+    fn probe_rejects_custom_protocol_endpoints() {
+        let profile = GatewayProfile {
+            id: "remote".to_string(),
+            name: "Remote".to_string(),
+            api_root: "https://unused.example/v1".to_string(),
+            token_ref: "remote".to_string(),
+            created_at: "2026-08-20T00:00:00Z".to_string(),
+            updated_at: "2026-08-20T00:00:00Z".to_string(),
+        };
+        let model = ManagedModel {
+            key: "remote::model".to_string(),
+            gateway_id: profile.id.clone(),
+            id: "model".to_string(),
+            name: "Model".to_string(),
+            vendor: "custom".to_string(),
+            capabilities: Default::default(),
+            configuration: crate::models::ModelConfiguration {
+                endpoint_override: Some("https://unused.example/v1/images/generations".to_string()),
+                use_custom_protocol: true,
+                ..Default::default()
+            },
+            evidence: Vec::new(),
+            metadata: json!({"id": "model"}),
+            updated_at: "2026-08-20T00:00:00Z".to_string(),
+        };
+
+        let error = tauri::async_runtime::block_on(GatewayClient::new(None).unwrap().probe(
             &profile,
             "test-token",
             &model,
         ))
-        .unwrap();
+        .unwrap_err();
 
-        server_thread.join().unwrap();
+        assert!(error.to_string().contains("custom protocol"));
     }
 
     #[test]
@@ -782,6 +923,117 @@ mod tests {
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id, "gpt-5.6");
         assert!(models[0].capabilities.supports_tool_call);
+        server_thread.join().unwrap();
+    }
+
+    #[test]
+    fn refresh_preserves_market_match_when_catalog_is_unavailable() {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let address = server.server_addr().to_string();
+        let server_thread = thread::spawn(move || {
+            let request = server.recv().unwrap();
+            request
+                .respond(
+                    Response::from_string(r#"{"data":[{"id":"text-model"},{"id":"image-model"}]}"#)
+                        .with_header(
+                            Header::from_bytes("content-type", "application/json").unwrap(),
+                        ),
+                )
+                .unwrap();
+        });
+        let profile = GatewayProfile {
+            id: "fake".to_string(),
+            name: "Fake gateway".to_string(),
+            api_root: format!("http://{address}/v1"),
+            token_ref: "fake".to_string(),
+            created_at: "2026-08-20T00:00:00Z".to_string(),
+            updated_at: "2026-08-20T00:00:00Z".to_string(),
+        };
+        let existing = [
+            ManagedModel {
+                key: "fake::text-model".to_string(),
+                gateway_id: profile.id.clone(),
+                id: "text-model".to_string(),
+                name: "Text".to_string(),
+                vendor: "custom".to_string(),
+                capabilities: crate::models::CapabilitySet {
+                    supports_tool_call: true,
+                    ..Default::default()
+                },
+                configuration: Default::default(),
+                evidence: vec![evidence(
+                    "toolCall",
+                    true,
+                    EvidenceSource::OpenRouter,
+                    "OpenRouter supported_parameters",
+                    "2026-08-20T00:00:00Z",
+                )],
+                metadata: json!({
+                    "everybuddyOpenRouterMatch": {
+                        "source": "openrouter",
+                        "modelId": "provider/text-model",
+                        "supportsTextOutput": true
+                    }
+                }),
+                updated_at: "2026-08-20T00:00:00Z".to_string(),
+            },
+            ManagedModel {
+                key: "fake::image-model".to_string(),
+                gateway_id: profile.id.clone(),
+                id: "image-model".to_string(),
+                name: "Image".to_string(),
+                vendor: "custom".to_string(),
+                capabilities: crate::models::CapabilitySet {
+                    supports_images: true,
+                    ..Default::default()
+                },
+                configuration: Default::default(),
+                evidence: vec![evidence(
+                    "images",
+                    true,
+                    EvidenceSource::OpenRouter,
+                    "OpenRouter input_modalities",
+                    "2026-08-20T00:00:00Z",
+                )],
+                metadata: json!({
+                    "everybuddyOpenRouterMatch": {
+                        "source": "openrouter",
+                        "modelId": "provider/image-model",
+                        "supportsTextOutput": false
+                    }
+                }),
+                updated_at: "2026-08-20T00:00:00Z".to_string(),
+            },
+        ];
+
+        let models = tauri::async_runtime::block_on(GatewayClient::new(None).unwrap().discover(
+            &profile,
+            "test-token",
+            &existing,
+        ))
+        .unwrap();
+
+        let text = models
+            .iter()
+            .find(|model| model.id == "text-model")
+            .unwrap();
+        let image = models
+            .iter()
+            .find(|model| model.id == "image-model")
+            .unwrap();
+        assert!(text.capabilities.supports_tool_call);
+        assert_eq!(
+            text.metadata
+                .pointer("/everybuddyOpenRouterMatch/supportsTextOutput"),
+            Some(&json!(true))
+        );
+        assert_eq!(image.capabilities, Default::default());
+        assert_eq!(
+            image
+                .metadata
+                .pointer("/everybuddyOpenRouterMatch/supportsTextOutput"),
+            Some(&json!(false))
+        );
         server_thread.join().unwrap();
     }
 

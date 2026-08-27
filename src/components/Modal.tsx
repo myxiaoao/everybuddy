@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { ErrorNotice, type ErrorNoticeContent } from "./ErrorNotice";
 
 interface ModalProps {
   open: boolean;
@@ -15,6 +16,7 @@ interface ModalProps {
   description?: string;
   children: ReactNode;
   footer?: ReactNode;
+  errorNotice?: ErrorNoticeContent;
   size?: "small" | "medium" | "large";
   closeLabel: string;
   onClose: () => void;
@@ -60,6 +62,7 @@ export function Modal({
   description,
   children,
   footer,
+  errorNotice,
   size = "medium",
   closeLabel,
   onClose,
@@ -108,7 +111,7 @@ export function Modal({
       }}
     >
       <DialogContent
-        className={cn(widths[size], "gap-0")}
+        className={cn(widths[size], "modal-shell gap-0")}
         closeLabel={closeLabel}
         onCloseAutoFocus={(event) => {
           if (!restoreFocus()) return;
@@ -122,6 +125,7 @@ export function Modal({
           ) : null}
         </DialogHeader>
         <div className="modal__body">{children}</div>
+        {errorNotice ? <ErrorNotice {...errorNotice} contained /> : null}
         {footer ? <DialogFooter>{footer}</DialogFooter> : null}
       </DialogContent>
     </Dialog>

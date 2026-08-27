@@ -42,7 +42,7 @@ export const api = {
     if (!isValidModelConfiguration(input.configuration)) {
       throw {
         code: "VALIDATION_ERROR",
-        message: "Model configuration contains an invalid numeric value",
+        message: "Model configuration contains an invalid value",
       } satisfies AppError;
     }
     return call<ManagedModel>("update_model", { input });

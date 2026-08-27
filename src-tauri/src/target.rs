@@ -11,9 +11,11 @@ const MAX_TARGET_MODELS: usize = 10_000;
 use atomicwrites::{AtomicFile, OverwriteBehavior};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
+use url::Url;
 
 use crate::{
     error::{CoreError, CoreResult},
+    gateway::{normalize_api_root, normalize_request_url},
     models::{GatewayProfile, ManagedModel, TargetKind, TargetSchema, TargetStatus},
     store::Store,
 };
@@ -248,6 +250,49 @@ impl ConfigDocument {
         summary
     }
 
+    pub fn sync(&mut self, incoming: &[Value], managed: &[Value]) -> MergeSummary {
+        let selected_ids: HashSet<_> = incoming
+            .iter()
+            .filter_map(|model| model.get("id").and_then(Value::as_str))
+            .collect();
+        let managed_identities: HashMap<_, _> = managed
+            .iter()
+            .filter_map(model_identity)
+            .map(|identity| (identity.key.clone(), identity))
+            .collect();
+        let mut remove_count = 0;
+
+        match self.schema {
+            TargetSchema::Array => self.root.as_array_mut().expect("array schema"),
+            TargetSchema::Wrapped => self
+                .root
+                .get_mut("models")
+                .and_then(Value::as_array_mut)
+                .expect("wrapped schema"),
+            _ => unreachable!("invalid schemas are rejected before sync"),
+        }
+        .retain(|model| {
+            let is_selected = model
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| selected_ids.contains(id));
+            let should_remove = !is_selected
+                && model_identity(model).is_some_and(|identity| {
+                    managed_identities
+                        .get(&identity.key)
+                        .is_some_and(|managed| identity.belongs_to(managed))
+                });
+            if should_remove {
+                remove_count += 1;
+            }
+            !should_remove
+        });
+
+        let mut summary = self.merge(incoming);
+        summary.remove_count = remove_count;
+        summary
+    }
+
     pub fn collisions(&self, ids: &HashSet<&str>) -> Vec<(String, String)> {
         self.models()
             .iter()
@@ -299,6 +344,76 @@ pub struct MergeSummary {
     pub add_count: usize,
     pub update_count: usize,
     pub unchanged_count: usize,
+    pub remove_count: usize,
+}
+
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct ModelIdentityKey {
+    id: String,
+    api_key: String,
+}
+
+struct ModelIdentity {
+    key: ModelIdentityKey,
+    url: String,
+    use_custom_protocol: bool,
+}
+
+impl ModelIdentity {
+    fn belongs_to(&self, managed: &Self) -> bool {
+        if self.url == managed.url && self.use_custom_protocol == managed.use_custom_protocol {
+            return true;
+        }
+        if self.use_custom_protocol == managed.use_custom_protocol {
+            return false;
+        }
+
+        let (standard, custom) = if self.use_custom_protocol {
+            (managed, self)
+        } else {
+            (self, managed)
+        };
+        let (Ok(standard_url), Ok(custom_url)) =
+            (Url::parse(&standard.url), Url::parse(&custom.url))
+        else {
+            return false;
+        };
+        if standard_url.origin() != custom_url.origin() {
+            return false;
+        }
+        custom_url
+            .path()
+            .strip_prefix(standard_url.path())
+            .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with('/'))
+    }
+}
+
+fn model_identity(model: &Value) -> Option<ModelIdentity> {
+    let id = model.get("id")?.as_str()?.trim();
+    let raw_url = model.get("url")?.as_str()?.trim();
+    let api_key = model.get("apiKey")?.as_str()?.trim();
+    if id.is_empty() || raw_url.is_empty() || api_key.is_empty() {
+        return None;
+    }
+    let use_custom_protocol = model
+        .get("useCustomProtocol")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let url = if use_custom_protocol {
+        normalize_request_url(raw_url)
+    } else {
+        normalize_api_root(raw_url)
+    }
+    .ok()?;
+
+    Some(ModelIdentity {
+        key: ModelIdentityKey {
+            id: id.to_string(),
+            api_key: api_key.to_string(),
+        },
+        url,
+        use_custom_protocol,
+    })
 }
 
 pub fn model_config(model: &ManagedModel, gateway: &GatewayProfile, token: &str) -> Value {
@@ -738,6 +853,26 @@ mod tests {
         assert_eq!(output["models"][0]["id"], "gpt-5");
         assert_eq!(output["availableModels"][0], "existing");
         assert_eq!(output["custom"], true);
+    }
+
+    #[test]
+    fn sync_preserves_same_credentials_outside_the_managed_gateway_root() {
+        let mut document = ConfigDocument::parse(
+            br#"[
+                {"id":"outside-path","url":"https://api.example.com/v2/images","apiKey":"token","useCustomProtocol":true},
+                {"id":"outside-origin","url":"https://other.example.com/v1/images","apiKey":"token","useCustomProtocol":true}
+            ]"#,
+        )
+        .unwrap();
+        let managed = [
+            json!({"id":"outside-path","url":"https://api.example.com/v1","apiKey":"token","useCustomProtocol":false}),
+            json!({"id":"outside-origin","url":"https://api.example.com/v1","apiKey":"token","useCustomProtocol":false}),
+        ];
+
+        let summary = document.sync(&[], &managed);
+
+        assert_eq!(summary.remove_count, 0);
+        assert_eq!(document.models().len(), 2);
     }
 
     #[test]

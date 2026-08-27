@@ -2,7 +2,7 @@
 
 ## 支持版本
 
-EveryBuddy 当前处于 Alpha 阶段，只为最新发布版本提供安全修复。旧版本发现安全问题后，应先升级到最新版本再复现。
+EveryBuddy 只为最新稳定版本提供安全修复。旧版本发现安全问题后，应先升级到最新稳定版本再复现。
 
 ## 报告漏洞
 
@@ -27,7 +27,7 @@ EveryBuddy 是本地桌面应用，不提供远程账户、云同步或团队权
 - **系统凭据库**：API Token 保存到 macOS Keychain 或 Windows Credential Manager。SQLite 只保存凭据引用。
 - **Target config**：WorkBuddy 和 CodeBuddy 的 `models.json` 是外部可修改文件。EveryBuddy 使用 Fingerprint 检测 Drift，并在每次写入前重新校验；条件回滚不会覆盖发布后发生的外部修改。
 - **本机文件系统**：目标文件和备份在 Unix 下使用 `0600` 权限，在 Windows 下写入仅允许当前用户访问的受保护 DACL。有效 symlink 会保留并写入真实目标，dangling symlink 会被拒绝。
-- **Updater pipeline**：Alpha 安装包暂未使用 Apple notarization 或 Windows Authenticode，操作系统会显示未验证开发者警告。Updater 资产仍使用独立 Ed25519 key 签名；Release workflow 在生成 Draft 后验证 Updater manifest、`.sig`、安装包和 SHA-256 校验和，并为发布资产生成 GitHub provenance attestation。
+- **Updater pipeline**：安装包暂未使用 Apple notarization 或 Windows Authenticode，操作系统会显示未验证开发者警告。Updater 资产使用独立 Ed25519 key 签名；Release workflow 在生成 Draft 后验证 Updater manifest、`.sig`、安装包和 SHA-256 校验和，并为发布资产生成 GitHub provenance attestation。
 - **诊断日志**：前端 Render Crash、未处理 Promise rejection、Updater 和操作错误经过统一结构化脱敏后，只按 `warn/error` 写入应用日志目录。日志文件最大 2 MiB，最多保留 3 个归档。
 
 Gateway 响应上限为 4 MiB，模型发现最多接受 10,000 条记录。单个 Target 配置上限为 8 MiB 和 10,000 个模型；重复 Model ID 会被拒绝。

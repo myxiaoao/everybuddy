@@ -1,6 +1,6 @@
 [package]
 name = "everybuddy"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
 description = "Manage OpenAI-compatible models for WorkBuddy and CodeBuddy"
 authors = ["EveryBuddy contributors"]
 edition = "2021"
