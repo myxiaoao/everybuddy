@@ -43,6 +43,7 @@ impl PublishCoordinator<'_> {
         let models = self
             .store
             .selected_models(&request.gateway_id, &request.model_ids)?;
+        let managed_models = self.store.models_for_gateway(&request.gateway_id)?;
         validate_model_configurations(&models)?;
         let token = self.secrets.get(&gateway.token_ref)?;
         let identity_key = source_identity_key(
@@ -51,6 +52,10 @@ impl PublishCoordinator<'_> {
         )?;
         let credential_revision = gateway_source_hash(&identity_key, &gateway.api_root, &token);
         let incoming: Vec<_> = models
+            .iter()
+            .map(|model| model_config(model, &gateway, &token))
+            .collect();
+        let managed: Vec<_> = managed_models
             .iter()
             .map(|model| model_config(model, &gateway, &token))
             .collect();
@@ -69,7 +74,7 @@ impl PublishCoordinator<'_> {
                     existing_name,
                 },
             ));
-            let summary = document.merge(&incoming);
+            let summary = document.sync(&incoming, &managed);
             targets.push(TargetPreview {
                 target: *kind,
                 path: path.to_string_lossy().to_string(),
@@ -78,6 +83,7 @@ impl PublishCoordinator<'_> {
                 add_count: summary.add_count,
                 update_count: summary.update_count,
                 unchanged_count: summary.unchanged_count,
+                remove_count: summary.remove_count,
             });
         }
 
@@ -90,7 +96,7 @@ impl PublishCoordinator<'_> {
             ],
             gateway_revision: gateway.updated_at,
             credential_revision,
-            model_revisions: model_revisions(&models),
+            model_revisions: model_revisions(&managed_models),
         })
     }
 
@@ -104,6 +110,7 @@ impl PublishCoordinator<'_> {
         let models = self
             .store
             .selected_models(&request.gateway_id, &request.model_ids)?;
+        let managed_models = self.store.models_for_gateway(&request.gateway_id)?;
         validate_model_configurations(&models)?;
         let token = self.secrets.get(&gateway.token_ref)?;
         let identity_key = source_identity_key(
@@ -111,7 +118,12 @@ impl PublishCoordinator<'_> {
             self.store.has_gateway_source_history()?,
         )?;
         let credential_revision = gateway_source_hash(&identity_key, &gateway.api_root, &token);
-        validate_resource_revisions(request, &gateway.updated_at, &credential_revision, &models)?;
+        validate_resource_revisions(
+            request,
+            &gateway.updated_at,
+            &credential_revision,
+            &managed_models,
+        )?;
         let mut source_hashes: Vec<_> = models
             .iter()
             .map(|model| {
@@ -127,6 +139,10 @@ impl PublishCoordinator<'_> {
         source_hashes.sort_unstable();
         source_hashes.dedup();
         let incoming: Vec<_> = models
+            .iter()
+            .map(|model| model_config(model, &gateway, &token))
+            .collect();
+        let managed: Vec<_> = managed_models
             .iter()
             .map(|model| model_config(model, &gateway, &token))
             .collect();
@@ -181,7 +197,7 @@ impl PublishCoordinator<'_> {
                     "Confirm model replacements before publishing".to_string(),
                 ));
             }
-            document.merge(&incoming);
+            document.sync(&incoming, &managed);
             prepared.push(PreparedTarget {
                 kind: *kind,
                 configured_path: path,
@@ -912,6 +928,91 @@ mod tests {
             fs::read(fixture.path(TargetKind::Codebuddy)).unwrap()
         );
         assert!(fixture.store.has_gateway_source_history().unwrap());
+    }
+
+    #[test]
+    fn publishing_selection_removes_only_unselected_models_from_current_gateway() {
+        let fixture = Fixture::new();
+        let gateway = fixture.store.gateway("gateway").unwrap();
+        let mut image_model = fixture.store.model("gateway::gpt-5").unwrap();
+        image_model.key = "gateway::gpt-image-2".to_string();
+        image_model.id = "gpt-image-2".to_string();
+        image_model.name = "GPT Image 2".to_string();
+        image_model.updated_at = "2026-08-20T00:00:01Z".to_string();
+        fixture.store.save_model(&image_model).unwrap();
+
+        let selected = model_config(
+            &fixture.store.model("gateway::gpt-5").unwrap(),
+            &gateway,
+            "test-token",
+        );
+        let mut unselected = model_config(&image_model, &gateway, "test-token");
+        unselected["url"] = json!("https://api.example.com/v1/images/generations");
+        unselected["useCustomProtocol"] = json!(true);
+        let external = json!({
+            "id": "external-model",
+            "name": "External model",
+            "url": "https://other.example.com/v1",
+            "apiKey": "other-token"
+        });
+        let unmanaged = json!({
+            "id": "local-model",
+            "name": "Local model",
+            "url": "https://api.example.com/v1",
+            "apiKey": "test-token"
+        });
+        let models = vec![selected, unselected, external, unmanaged];
+        fs::write(
+            fixture.path(TargetKind::Workbuddy),
+            serde_json::to_vec_pretty(&models).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            fixture.path(TargetKind::Codebuddy),
+            serde_json::to_vec_pretty(&json!({
+                "models": models,
+                "availableModels": ["preserved-root-field"]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let preview = fixture
+            .coordinator()
+            .preview(
+                &PreparePublishRequest {
+                    gateway_id: "gateway".to_string(),
+                    model_ids: vec!["gpt-5".to_string()],
+                    targets: vec![TargetKind::Workbuddy, TargetKind::Codebuddy],
+                },
+                &fixture.paths,
+            )
+            .unwrap();
+        assert!(preview
+            .targets
+            .iter()
+            .all(|target| target.remove_count == 1));
+
+        let request = fixture.request(vec![TargetKind::Workbuddy, TargetKind::Codebuddy]);
+        let result = fixture
+            .coordinator()
+            .execute(&request, &fixture.paths)
+            .unwrap();
+
+        assert!(result.success);
+        for target in [TargetKind::Workbuddy, TargetKind::Codebuddy] {
+            assert_eq!(
+                model_ids(&fixture.path(target)),
+                vec!["gpt-5", "external-model", "local-model"]
+            );
+        }
+        let codebuddy: Value =
+            serde_json::from_slice(&fs::read(fixture.path(TargetKind::Codebuddy)).unwrap())
+                .unwrap();
+        assert_eq!(
+            codebuddy["availableModels"],
+            json!(["preserved-root-field"])
+        );
     }
 
     #[cfg(unix)]

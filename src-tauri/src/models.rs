@@ -326,6 +326,7 @@ pub struct TargetPreview {
     pub add_count: usize,
     pub update_count: usize,
     pub unchanged_count: usize,
+    pub remove_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

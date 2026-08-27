@@ -438,6 +438,11 @@ export function PublishDialog({
                   <span className="is-update">
                     {t("updates", { count: target.updateCount })}
                   </span>
+                  {(target.removeCount ?? 0) > 0 ? (
+                    <span className="is-update">
+                      {t("remove")} {target.removeCount}
+                    </span>
+                  ) : null}
                   <span>
                     {t("unchanged", { count: target.unchangedCount })}
                   </span>

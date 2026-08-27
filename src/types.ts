@@ -164,6 +164,7 @@ export interface TargetPreview {
   addCount: number;
   updateCount: number;
   unchangedCount: number;
+  removeCount?: number;
 }
 
 export interface ModelConflict {
