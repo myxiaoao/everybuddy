@@ -80,7 +80,7 @@ const messages = {
     evidenceMetadata: "API metadata",
     evidenceOpenRouter: "OpenRouter 模型目录",
     evidenceImported: "目标配置导入",
-    evidenceProbe: "主动 Probe",
+    evidenceProbe: "主动探测",
     evidenceManual: "人工覆盖",
     saveCapabilities: "保存能力",
     advancedModelConfig: "高级配置",
@@ -95,7 +95,8 @@ const messages = {
     providerDefaultPlaceholder: "使用提供商默认值",
     temperature: "Temperature",
     customProtocol: "自定义协议",
-    customProtocolHint: "直接使用请求地址，不自动追加 /chat/completions。",
+    customProtocolHint:
+      "启用后必须填写完整请求地址；不会自动追加 /chat/completions，且不支持主动探测。",
     reasoningConfig: "思考配置",
     onlyReasoning: "仅思考模式",
     onlyReasoningHint: "模型选择器只显示思考开关，不显示强度选择。",
@@ -110,7 +111,8 @@ const messages = {
     automatic: "自动（使用请求层默认值）",
     notSet: "不设置",
     reasoningSummary: "思考摘要",
-    reasoningSummaryHint: "此字段存在两套兼容枚举，请按接口实际行为选择。",
+    reasoningSummaryHint:
+      "WorkBuddy 和 CodeBuddy 当前支持 auto、concise、detailed；旧值需重新选择后保存。",
     effort_minimal: "最低",
     effort_low: "低",
     effort_medium: "中",
@@ -120,12 +122,11 @@ const messages = {
     summary_auto: "自动",
     summary_concise: "简洁",
     summary_detailed: "详细",
-    summary_always: "始终（SDK）",
-    summary_never: "从不（SDK）",
     saveModelConfig: "保存模型配置",
     modelConfigSaved: "模型配置已保存",
-    probe: "主动 Probe",
-    probeTitle: "执行能力 Probe",
+    probe: "主动探测",
+    probeTitle: "执行能力探测",
+    probeUnavailableCustomProtocol: "自定义协议模式不支持主动探测",
     probeBody:
       "将向 /v1/chat/completions 发送 3 个最小请求，分别检查工具调用、图片输入和推理模式。请求可能产生少量 Token 费用。",
     runProbe: "执行 3 个请求",
@@ -378,7 +379,7 @@ const messages = {
     temperature: "Temperature",
     customProtocol: "Custom protocol",
     customProtocolHint:
-      "Use the endpoint as-is without appending /chat/completions.",
+      "Enter a complete request URL. The app will not append /chat/completions, and active probing is unavailable.",
     reasoningConfig: "Reasoning configuration",
     onlyReasoning: "Reasoning only",
     onlyReasoningHint:
@@ -399,7 +400,7 @@ const messages = {
     notSet: "Not set",
     reasoningSummary: "Reasoning summary",
     reasoningSummaryHint:
-      "This field has two compatible enum sets. Match the value to your endpoint behavior.",
+      "Current WorkBuddy and CodeBuddy runtimes support auto, concise, and detailed. Legacy values must be replaced before saving.",
     effort_minimal: "Minimal",
     effort_low: "Low",
     effort_medium: "Medium",
@@ -409,12 +410,12 @@ const messages = {
     summary_auto: "Auto",
     summary_concise: "Concise",
     summary_detailed: "Detailed",
-    summary_always: "Always (SDK)",
-    summary_never: "Never (SDK)",
     saveModelConfig: "Save model configuration",
     modelConfigSaved: "Model configuration saved",
     probe: "Active probe",
     probeTitle: "Run capability probe",
+    probeUnavailableCustomProtocol:
+      "Active probing is unavailable for custom protocol endpoints",
     probeBody:
       "EveryBuddy will send 3 minimal /v1/chat/completions requests for Tool Call, Vision, and Reasoning. These requests may consume a small number of tokens.",
     runProbe: "Run 3 requests",

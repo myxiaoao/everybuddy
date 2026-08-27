@@ -43,15 +43,17 @@ EveryBuddy 首版支持使用 Bearer Token 的 OpenAI-compatible API：
 
 ## 模型能力与思考强度
 
-模型能力按以下优先级解析：人工设置、成功的主动 Probe、已有目标配置的导入值、OpenRouter、API 返回的 metadata、保守默认值。Probe 只在用户确认后执行，一次最多发送 3 个最小请求，可能产生少量 Token 消耗。
+模型能力按以下优先级解析：人工设置、成功的主动 Probe、已有目标配置的导入值、API 返回的 Gateway metadata、OpenRouter、保守默认值。Gateway 或 OpenRouter 明确标记为非 text-output 的模型始终不投影聊天能力，Probe、导入记录或人工设置不能将其重新启用。Probe 只在用户确认后执行，一次最多发送 3 个最小请求，可能产生少量 Token 消耗。
 
 EveryBuddy 在首次模型发现或手动添加模型时按需读取 OpenRouter 公开模型目录。请求不会携带用户 Token、API Base URL 或 API metadata。成功结果会在本机缓存 6 小时；请求失败后 15 分钟内不重复请求。
 
 OpenRouter 明确返回 `reasoning.supported_efforts` 时，EveryBuddy 会将其中的 `minimal`、`low`、`medium`、`high`、`xhigh` 和 `max` 写入 `reasoning.supportedEfforts`。`none` 表示允许关闭思考，不作为强度档位写入；`reasoning.default_effort` 和 `reasoning.mandatory` 分别映射为默认思考强度和是否允许关闭思考。OpenRouter 没有返回明确范围时，EveryBuddy 不会仅凭 `reasoning_effort` 参数名称推测具体档位。
 
-OpenRouter 还会补齐最大输入 Token、最大输出 Token 和非空的默认 Temperature。已有 Target 导入配置和人工设置不会被自动匹配覆盖；未匹配到 OpenRouter 模型时，应用回退 API metadata 和保守默认值。
+OpenRouter 还会补齐 Gateway metadata 缺失的最大输入 Token、最大输出 Token、非空默认 Temperature 和 Reasoning 信息。Gateway 明确返回的字段优先；已有 Target 导入配置和人工设置也不会被自动匹配覆盖。
 
-同一模型存在基础记录、Batch/Free 变体、Alias 或带日期的 Canonical slug 时，EveryBuddy 使用 OpenRouter 的关联字段选择无变体基础记录作为能力来源，不做前缀模糊匹配。例如 `openai/gpt-5.6-sol:batch` 读取 `openai/gpt-5.6-sol` 的能力，而 `openai/gpt-5.6-sol-pro` 保持独立。发布时始终保留 API 实际返回的 Model ID。非 text-output 模型不会被错误映射为 WorkBuddy/CodeBuddy 的聊天参数。
+同一模型存在基础记录、Batch/Free 变体、Alias 或带日期的 Canonical slug 时，EveryBuddy 优先使用完整 Model ID 对应记录的明确字段，只用关联的基础记录补齐缺失字段；只有查询的 Canonical slug 没有精确记录时才解析到基础记录。匹配不使用前缀模糊规则，因此 `openai/gpt-5.6-sol` 和 `openai/gpt-5.6-sol-pro` 始终独立。发布时保留 Gateway 实际返回的 Model ID。非 text-output 模型不会被错误映射为 WorkBuddy/CodeBuddy 的聊天参数；旧版 OpenRouter 匹配记录缺少 text-output eligibility 时按未验证处理，刷新模型后才重新投影聊天能力。
+
+Vision Probe 使用固定四色条 challenge，文本提示不包含答案，并且只有响应准确返回预期顺序时才确认图片能力。重新 Probe 会替换旧 Probe Evidence；修改 `endpointOverride` 或切换 `useCustomProtocol` 也会移除旧 Evidence。Custom Protocol 必须配置完整 `endpointOverride`，发布时不追加 `/v1` 或 `/chat/completions`，因此不执行基于 Chat Completions 的能力 Probe。旧版曾把 Custom Protocol 地址归一化为 API Root，升级后会清空这类历史地址，必须重新填写完整请求 URL。WorkBuddy 5.3.14 runtime 的 Reasoning Summary 仅接受 `auto`、`concise`、`detailed`；历史数据库中的 `always`、`never` 仍可读取，但必须改成受支持值后才能保存或发布。
 
 ## 配置目标
 
@@ -61,6 +63,8 @@ OpenRouter 还会补齐最大输入 Token、最大输出 Token 和非空的默�
 | Windows | `%USERPROFILE%\.workbuddy\models.json` | `%USERPROFILE%\.codebuddy\models.json` |
 
 EveryBuddy 支持模型数组和包含 `models` 数组的旧包装格式。更新已有模型时，应用会保留未知顶层字段、未知模型字段和未知 Reasoning 字段。写入前如果检测到其他程序修改了目标文件，本次发布会停止并要求重新加载差异。
+
+WorkBuddy 与 CodeBuddy 使用不同配置路径，但共享同一套序列化规则；同一次双目标发布写入的模型配置内容一致。
 
 ## Token 安全边界
 

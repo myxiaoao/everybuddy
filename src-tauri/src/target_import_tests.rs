@@ -604,7 +604,7 @@ fn matches_existing_custom_protocol_models_without_importing_them() {
     let paths = target_paths(directory.path());
     std::fs::write(
         paths.get(&TargetKind::Workbuddy).unwrap(),
-        r#"[{"id":"custom","url":"https://gateway.example/v1","apiKey":"secret","useCustomProtocol":true}]"#,
+        r#"[{"id":"custom","url":"https://gateway.example/v1/images/generations","apiKey":"secret","useCustomProtocol":true}]"#,
     )
     .unwrap();
     let store = Store::open(&directory.path().join("everybuddy.db")).unwrap();
@@ -618,6 +618,7 @@ fn matches_existing_custom_protocol_models_without_importing_them() {
     };
     store.save_gateway(&profile).unwrap();
     let configuration = crate::models::ModelConfiguration {
+        endpoint_override: Some("https://gateway.example/v1/images/generations".to_string()),
         use_custom_protocol: true,
         ..Default::default()
     };

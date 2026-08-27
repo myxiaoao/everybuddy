@@ -14,7 +14,9 @@ use uuid::Uuid;
 use crate::{
     capability::{configuration_from_metadata, evidence, infer_vendor, CapabilityResolver},
     error::{CoreError, CoreResult},
-    gateway::{normalize_api_root, object_without_secret, value_contains_secret},
+    gateway::{
+        normalize_api_root, normalize_request_url, object_without_secret, value_contains_secret,
+    },
     gateway_service::{gateway_source_hash, source_identity_key},
     market_catalog,
     models::{
@@ -359,14 +361,16 @@ impl ImportContext {
             .gateways
             .iter()
             .find(|gateway| gateway.profile.id == model.gateway_id)?;
-        normalize_api_root(
-            model
-                .configuration
-                .endpoint_override
-                .as_deref()
-                .unwrap_or(&gateway.profile.api_root),
-        )
-        .ok()
+        let endpoint = model
+            .configuration
+            .endpoint_override
+            .as_deref()
+            .unwrap_or(&gateway.profile.api_root);
+        if model.configuration.use_custom_protocol {
+            normalize_request_url(endpoint).ok()
+        } else {
+            normalize_api_root(endpoint).ok()
+        }
     }
 
     fn is_new_gateway(&self, gateway_id: &str) -> bool {
@@ -577,12 +581,21 @@ impl ParsedEntry {
         let model_id = required_string(object.get("id"), target, None, "missingModelId")?;
         let model_ref = Some(model_id.clone());
         let raw_url = required_string(object.get("url"), target, model_ref.clone(), "missingUrl")?;
-        let api_root = normalize_api_root(&raw_url).map_err(|_| {
+        let use_custom_protocol = object
+            .get("useCustomProtocol")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let normalized_url = if use_custom_protocol {
+            normalize_request_url(&raw_url)
+        } else {
+            normalize_api_root(&raw_url)
+        };
+        let api_root = normalized_url.map_err(|_| {
             issue(
                 target,
                 model_ref.clone(),
                 "invalidUrl",
-                "The target model URL is not a valid HTTP or HTTPS API root".to_string(),
+                "The target model URL is not a valid HTTP or HTTPS endpoint".to_string(),
             )
         })?;
         let token = required_string(

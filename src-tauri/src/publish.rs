@@ -9,6 +9,7 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use crate::{
+    capability::{has_unverified_market_match, supports_chat_configuration},
     error::{CoreError, CoreResult},
     gateway_service::{gateway_source_hash, source_identity_key},
     models::{
@@ -450,6 +451,50 @@ fn validate_model_configurations(models: &[crate::models::ManagedModel]) -> Core
             "One or more selected models contain invalid numeric configuration".to_string(),
         ));
     }
+    if models.iter().any(|model| {
+        model
+            .configuration
+            .reasoning
+            .summary
+            .is_some_and(|summary| !summary.is_supported_target_value())
+    }) {
+        return Err(CoreError::Validation(
+            "One or more selected models use an unsupported reasoning summary".to_string(),
+        ));
+    }
+    if models.iter().any(|model| {
+        model.configuration.use_custom_protocol && model.configuration.endpoint_override.is_none()
+    }) {
+        return Err(CoreError::Validation(
+            "One or more custom protocol models are missing a complete request URL".to_string(),
+        ));
+    }
+    if models
+        .iter()
+        .any(|model| has_unverified_market_match(&model.metadata))
+    {
+        return Err(CoreError::Validation(
+            "One or more selected models need an OpenRouter capability refresh before publishing"
+                .to_string(),
+        ));
+    }
+    if models.iter().any(|model| {
+        !supports_chat_configuration(&model.metadata)
+            && (model.capabilities.supports_tool_call
+                || model.capabilities.supports_images
+                || model.capabilities.supports_reasoning
+                || !model.capabilities.reasoning_efforts.is_empty()
+                || model.configuration.max_input_tokens.is_some()
+                || model.configuration.max_output_tokens.is_some()
+                || model.configuration.temperature.is_some()
+                || model.configuration.only_reasoning
+                || model.configuration.reasoning != Default::default())
+    }) {
+        return Err(CoreError::Validation(
+            "One or more non-text models contain unsupported chat capabilities or parameters"
+                .to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -728,6 +773,101 @@ mod tests {
     }
 
     #[test]
+    fn preview_rejects_legacy_reasoning_summary_values() {
+        let fixture = Fixture::new();
+        let mut model = fixture.store.model("gateway::gpt-5").unwrap();
+        model.capabilities.supports_reasoning = true;
+        model.configuration.reasoning.summary = Some(crate::models::ReasoningSummary::Never);
+        fixture.store.save_model(&model).unwrap();
+        let request = PreparePublishRequest {
+            gateway_id: "gateway".to_string(),
+            model_ids: vec!["gpt-5".to_string()],
+            targets: vec![TargetKind::Workbuddy],
+        };
+
+        let error = fixture
+            .coordinator()
+            .preview(&request, &fixture.paths)
+            .unwrap_err();
+
+        assert!(matches!(error, CoreError::Validation(_)));
+        assert!(!fixture.path(TargetKind::Workbuddy).exists());
+    }
+
+    #[test]
+    fn preview_rejects_custom_protocol_without_a_request_url() {
+        let fixture = Fixture::new();
+        let mut model = fixture.store.model("gateway::gpt-5").unwrap();
+        model.configuration.use_custom_protocol = true;
+        model.configuration.endpoint_override = None;
+        fixture.store.save_model(&model).unwrap();
+        let request = PreparePublishRequest {
+            gateway_id: "gateway".to_string(),
+            model_ids: vec!["gpt-5".to_string()],
+            targets: vec![TargetKind::Workbuddy],
+        };
+
+        let error = fixture
+            .coordinator()
+            .preview(&request, &fixture.paths)
+            .unwrap_err();
+
+        assert!(matches!(error, CoreError::Validation(_)));
+        assert!(!fixture.path(TargetKind::Workbuddy).exists());
+    }
+
+    #[test]
+    fn preview_rejects_legacy_non_text_chat_projection() {
+        let fixture = Fixture::new();
+        let mut model = fixture.store.model("gateway::gpt-5").unwrap();
+        model.metadata["everybuddyOpenRouterMatch"] = json!({
+            "source": "openrouter",
+            "modelId": "provider/image-model",
+            "supportsTextOutput": false
+        });
+        model.capabilities.supports_images = true;
+        model.configuration.max_output_tokens = Some(4_096);
+        fixture.store.save_model(&model).unwrap();
+        let request = PreparePublishRequest {
+            gateway_id: "gateway".to_string(),
+            model_ids: vec!["gpt-5".to_string()],
+            targets: vec![TargetKind::Workbuddy],
+        };
+
+        let error = fixture
+            .coordinator()
+            .preview(&request, &fixture.paths)
+            .unwrap_err();
+
+        assert!(matches!(error, CoreError::Validation(_)));
+        assert!(!fixture.path(TargetKind::Workbuddy).exists());
+    }
+
+    #[test]
+    fn preview_rejects_unverified_legacy_market_matches() {
+        let fixture = Fixture::new();
+        let mut model = fixture.store.model("gateway::gpt-5").unwrap();
+        model.metadata["everybuddyOpenRouterMatch"] = json!({
+            "source": "openrouter",
+            "modelId": "openai/gpt-5"
+        });
+        fixture.store.save_model(&model).unwrap();
+        let request = PreparePublishRequest {
+            gateway_id: "gateway".to_string(),
+            model_ids: vec!["gpt-5".to_string()],
+            targets: vec![TargetKind::Workbuddy],
+        };
+
+        let error = fixture
+            .coordinator()
+            .preview(&request, &fixture.paths)
+            .unwrap_err();
+
+        assert!(error.to_string().contains("capability refresh"));
+        assert!(!fixture.path(TargetKind::Workbuddy).exists());
+    }
+
+    #[test]
     fn publishes_to_each_single_target() {
         for target in [TargetKind::Workbuddy, TargetKind::Codebuddy] {
             let fixture = Fixture::new();
@@ -766,6 +906,10 @@ mod tests {
         assert_eq!(
             model_ids(&fixture.path(TargetKind::Codebuddy)),
             vec!["gpt-5"]
+        );
+        assert_eq!(
+            fs::read(fixture.path(TargetKind::Workbuddy)).unwrap(),
+            fs::read(fixture.path(TargetKind::Codebuddy)).unwrap()
         );
         assert!(fixture.store.has_gateway_source_history().unwrap());
     }

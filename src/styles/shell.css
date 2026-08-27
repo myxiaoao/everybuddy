@@ -53,11 +53,6 @@
   cursor: pointer;
 }
 
-.command-stage:first-of-type {
-  gap: 14px;
-  padding-inline-start: 0;
-}
-
 .command-stage.is-current {
   color: var(--color-text-primary);
   background: var(--color-bg-selected);

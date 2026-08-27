@@ -47,4 +47,37 @@ describe("model configuration validation", () => {
       }),
     ).toBe(true);
   });
+
+  it("reads legacy summaries but requires a supported value before saving", () => {
+    for (const summary of ["always", "never"] as const) {
+      expect(
+        isValidModelConfiguration({
+          ...base,
+          reasoning: { ...base.reasoning, summary },
+        }),
+      ).toBe(false);
+    }
+    expect(
+      isValidModelConfiguration({
+        ...base,
+        reasoning: { ...base.reasoning, summary: "detailed" },
+      }),
+    ).toBe(true);
+  });
+
+  it("requires a complete endpoint override for custom protocol", () => {
+    expect(
+      isValidModelConfiguration({
+        ...base,
+        useCustomProtocol: true,
+      }),
+    ).toBe(false);
+    expect(
+      isValidModelConfiguration({
+        ...base,
+        endpointOverride: "https://gateway.example/v1/images/generations",
+        useCustomProtocol: true,
+      }),
+    ).toBe(true);
+  });
 });

@@ -103,6 +103,15 @@ describe("EveryBuddy workspace", () => {
       screen.getByText("当前选择已覆盖自动匹配结果。"),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("switch", { name: "自定义协议" }));
+    expect(screen.getByRole("button", { name: "主动探测" })).toBeDisabled();
+    fireEvent.change(
+      screen.getByRole("textbox", { name: /^接口地址（可选）/ }),
+      {
+        target: {
+          value: "https://gateway.example/v1/images/generations",
+        },
+      },
+    );
     fireEvent.click(screen.getByRole("button", { name: "保存模型配置" }));
 
     await waitFor(() =>
