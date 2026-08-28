@@ -11,6 +11,14 @@
 
 EveryBuddy 把 Token 保存到 macOS Keychain 或 Windows Credential Manager。系统凭据缺失时，编辑对应 API 并重新保存 Token。不要把 Token 写入 Issue、截图或日志附件。
 
+## 无法从 OpenRouter 设置
+
+1. 检查当前 Model ID 和 Vendor 是否与 OpenRouter 中的记录一致。
+2. 刷新当前 API 的模型列表，让 EveryBuddy 重新匹配 OpenRouter 公共模型目录。
+3. 确认可以访问 `https://openrouter.ai`。只有存在于 `GET /api/v1/models?output_modalities=all` 返回结果中的模型才能使用「从 OpenRouter 设置」。
+
+目录匹配成功后，EveryBuddy 还会请求对应模型的详情接口。该请求失败时不会修改当前模型配置，可以在网络恢复后重试。
+
 ## Target 不可发布
 
 在「设置」中检查 WorkBuddy 和 CodeBuddy 的配置路径。确认当前用户能够访问父目录和 `models.json`。损坏的 JSON、dangling symlink、无写权限或超过大小限制的文件会停止发布。
@@ -30,13 +38,21 @@ EveryBuddy 在预览和写入之间检测到外部修改时会停止发布。重
 
 ## Updater 无法检查更新
 
-Alpha Prerelease 使用手动下载更新，因为 GitHub `releases/latest` 不会选择 Prerelease。诊断日志中出现 `updater.check` 记录不影响 Alpha 安装包使用。稳定更新通道启用后，再检查 GitHub Releases 连通性和有效 Updater public key；本地开发构建不生成 Updater artifact。
+确认可以访问 GitHub Releases，并检查应用是否使用有效的 Updater public key。当前稳定版本通过 GitHub `releases/latest` 获取更新清单；本地开发构建不生成 Updater artifact。
 
-## 系统阻止打开 Alpha 安装包
+## 系统阻止打开安装包
 
-当前 Alpha 安装包没有 Apple Developer ID 或 Windows Authenticode 平台签名。只从项目 GitHub Releases 下载并先核对 `SHA256SUMS.txt`。
+当前安装包没有 Apple Developer ID 或 Windows Authenticode 平台签名。只从项目 GitHub Releases 下载并先核对 `SHA256SUMS.txt`。
 
-- macOS：在 Finder 中对应用选择「打开」，或在「系统设置 → 隐私与安全性」中确认打开。
+- macOS：把 `EveryBuddy.app` 移动到「应用程序」目录后，先在 Finder 中对应用选择「打开」，或在「系统设置 → 隐私与安全性」中确认打开。如果 Gatekeeper 仍然阻止启动，并且已经完成 SHA-256 校验，执行：
+
+  ```bash
+  sudo xattr -cr "/Applications/EveryBuddy.app"
+  open "/Applications/EveryBuddy.app"
+  ```
+
+  `xattr -cr` 会递归清除应用包的扩展属性。不要把命令目标改成 `/Applications` 或其他目录。
+
 - Windows：在 SmartScreen 中选择「更多信息 → 仍要运行」。
 
 如果下载来源或 SHA-256 不一致，不要绕过系统警告。

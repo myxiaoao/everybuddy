@@ -73,20 +73,20 @@ Token -> macOS Keychain / Windows Credential Manager
 
 ### 4.2 Rust Core
 
-| 模块                 | 职责                                                                |
-| -------------------- | ------------------------------------------------------------------- |
-| `gateway.rs`         | URL 规范化、模型发现、主动 Probe、网络错误分类                      |
-| `market_catalog.rs`  | OpenRouter 公开模型目录读取、边界校验、精确匹配、磁盘缓存和请求合并 |
-| `gateway_service.rs` | Gateway Profile 与系统凭据的补偿式保存和删除                        |
-| `capability.rs`      | Capability Evidence 合并、Gateway metadata 解析和 Vendor 推断       |
-| `store.rs`           | SQLite connection、transaction 边界和 Repository facade             |
-| `store/migration.rs` | 版本化 schema migration 和迁移前备份                                |
-| `store/queries.rs`   | Gateway、模型的 SQL row codec 和 JSON serialization                 |
-| `secrets.rs`         | Keychain / Credential Manager 读写                                  |
-| `target.rs`          | Target Adapter、schema codec、摘要、权限和原子写入                  |
-| `target_import.rs`   | 启动导入、Target 模型匹配、结构化跳过原因和 Token 隔离              |
-| `publish.rs`         | 发布预览、冲突确认、备份、补偿回滚和恢复                            |
-| `commands.rs`        | 可序列化的 Tauri command 边界                                       |
+| 模块                 | 职责                                                                          |
+| -------------------- | ----------------------------------------------------------------------------- |
+| `gateway.rs`         | URL 规范化、模型发现、主动 Probe、网络错误分类                                |
+| `market_catalog.rs`  | OpenRouter 公开模型目录与模型详情读取、边界校验、精确匹配、磁盘缓存和请求合并 |
+| `gateway_service.rs` | Gateway Profile 与系统凭据的补偿式保存和删除                                  |
+| `capability.rs`      | Capability Evidence 合并、Gateway metadata 解析和 Vendor 推断                 |
+| `store.rs`           | SQLite connection、transaction 边界和 Repository facade                       |
+| `store/migration.rs` | 版本化 schema migration 和迁移前备份                                          |
+| `store/queries.rs`   | Gateway、模型的 SQL row codec 和 JSON serialization                           |
+| `secrets.rs`         | Keychain / Credential Manager 读写                                            |
+| `target.rs`          | Target Adapter、schema codec、摘要、权限和原子写入                            |
+| `target_import.rs`   | 启动导入、Target 模型匹配、结构化跳过原因和 Token 隔离                        |
+| `publish.rs`         | 发布预览、冲突确认、备份、补偿回滚和恢复                                      |
+| `commands.rs`        | 可序列化的 Tauri command 边界                                                 |
 
 ## 5. 数据模型
 
@@ -129,11 +129,15 @@ Authorization: Bearer {token}
 
 Gateway 返回的结构化 metadata 代表当前 API 来源，明确字段优先于公共 OpenRouter 目录；OpenRouter 只补齐缺失字段。EveryBuddy 支持顶层和 `capabilities` 内的 Capability boolean、`supported_parameters`、`input_modalities`、`architecture.input_modalities`、`features`，以及 `reasoning.supportedEfforts` 等常见 OpenAI-compatible 扩展字段。Provider 依次从 `vendor`、`provider`、`owned_by`、`ownedBy`、`organization` 等 metadata 读取并规范化。
 
-OpenRouter Directory 使用 lazy load：打开应用和启动配置恢复不发起请求，首次模型发现或手动添加模型时才读取不需要认证的 OpenRouter Models API。成功响应同时写入内存和 Tauri `app_data_dir/openrouter-models-cache.json`，有效期为 6 小时；同一进程的并发调用通过 single-flight 串行合并。请求失败后 15 分钟内不重复尝试，并优先继续使用过期磁盘快照；没有任何快照时才回退 Gateway metadata 和保守默认值。因此连续刷新多个 Gateway 不会重复下载目录。
+OpenRouter Directory 使用 lazy load：打开应用和启动配置恢复不发起请求，首次模型发现或手动添加模型时才请求 `GET https://openrouter.ai/api/v1/models?output_modalities=all`。成功响应同时写入内存和 Tauri `app_data_dir/openrouter-models-cache.json`，有效期为 6 小时；同一进程的并发调用通过 single-flight 串行合并。请求失败后 15 分钟内不重复尝试，并优先继续使用过期磁盘快照；没有任何快照时才回退 Gateway metadata 和保守默认值。因此连续刷新多个 Gateway 不会重复下载目录。
 
-OpenRouter 只对当前 Gateway 返回或用户手动输入的 Model ID 做本机匹配，不把全量模型导入模型库，也不会向 OpenRouter 发送用户 Token、Base URL、模型选择或其他 Gateway metadata。请求超时为 5 秒，响应上限为 8 MiB 和 10,000 个模型。
+目录请求不携带用户 Token、Gateway Base URL、模型选择或其他 Gateway metadata。EveryBuddy 只对当前 Gateway 返回或用户手动输入的 Model ID 做本机匹配，不把全量模型导入模型库。目录请求超时为 5 秒，响应上限为 8 MiB 和 10,000 个模型。
 
 模型解析将能力字段来源与实际调用 ID 分开。匹配顺序为：完整 Model ID、Provider namespace + leaf ID、全目录唯一 leaf ID；查询值没有精确记录时，再通过共享 `canonical_slug` 定位无变体基础记录。精确命中的 Batch/Free 变体或 Alias 保留自身明确字段，并按字段从 `alias_target.slug`、共享 `canonical_slug` 或同名基础记录补齐缺失值，不再整体替换成基础记录。禁止使用前缀模糊匹配，例如 `openai/gpt-5.6-sol` 和 `openai/gpt-5.6-sol-pro` 始终独立。发布到 Target 的 `id` 保持 Gateway 实际返回值。Gateway 未提供显示名称时，才使用匹配记录的 OpenRouter `name`。
+
+只有已在目录中匹配的模型才能执行「从 OpenRouter 设置」。用户触发后，EveryBuddy 请求 `GET https://openrouter.ai/api/v1/model/{author}/{slug}`；Alias 和 `:free` 等 Variant suffix 保留在匹配后的路径中。模型详情请求超时为 5 秒，响应上限为 1 MiB，URL 包含匹配后的 OpenRouter Model ID，但不携带用户 Token。
+
+成功响应会替换当前 Capability、Evidence 和自动模型配置，同时保留用户的 `endpointOverride` 与 `useCustomProtocol`。远程请求在 mutation lock 外执行，写入前重新比较模型快照；模型在请求期间被修改时拒绝旧响应，避免覆盖并发编辑。
 
 ### 6.3 主动 Probe
 
@@ -199,7 +203,7 @@ Reasoning Effort 支持 `minimal`、`low`、`medium`、`high`、`xhigh` 和 `max
 [
   {
     "id": "gpt-5.6",
-    "name": "GPT-5.6",
+    "name": "Main API · GPT-5.6",
     "vendor": "openai",
     "url": "https://api.example.com/v1",
     "apiKey": "<written-at-publish-time>",
@@ -224,11 +228,11 @@ Reasoning Effort 支持 `minimal`、`low`、`medium`、`high`、`xhigh` 和 `max
 
 旧包装格式必须包含 `models` 数组。Codec 更新已管理字段时保留未知模型字段、未知 Reasoning 子字段、未知顶层字段和原有 Envelope。用户清空可选的已管理字段时，Codec 会从目标模型中移除对应旧值。单个 Target 配置上限为 8 MiB 和 10,000 个模型；同一文件出现重复 Model ID 时拒绝解析，避免目标产品采用不确定条目。
 
-WorkBuddy 与 CodeBuddy 的默认路径不同，但共用 `model_config` 和 `ConfigDocument` 序列化逻辑。同一次双目标发布对相同输入生成一致的模型配置内容，各自的现有 envelope 和未知字段仍按目标文件独立保留。
+WorkBuddy 与 CodeBuddy 的默认路径不同，但共用 `model_config` 和 `ConfigDocument` 序列化逻辑。同一次双目标发布对相同输入生成一致的模型配置内容，各自的现有 envelope 和未知字段仍按目标文件独立保留。两个 Target 的显示名称均使用 `API 来源名称 · 模型名称`，Model ID 保持不变；模型名称已经带有同一来源前缀时不重复添加。
 
 ### 8.1 启动导入与匹配
 
-`bootstrap` 把两个 Target 的 `models.json` 作为外部事实来源。导入只在应用启动时执行，不发送 `/models` 或 `/chat/completions` 请求。
+`bootstrap` 把两个 Target 的当前 `models.json` 作为外部事实来源。每次启动都重新执行匹配；导入只在应用启动时执行，不发送 `/models` 或 `/chat/completions` 请求。
 
 1. 按 WorkBuddy、CodeBuddy 的固定顺序读取数组或 wrapped schema。
 2. 只接受 `useCustomProtocol: false`、符合远程 HTTPS 或本机 loopback HTTP 规则的 URL、非空 Model ID 和非空 `apiKey` 的条目。
@@ -241,7 +245,7 @@ WorkBuddy 与 CodeBuddy 的默认路径不同，但共用 `model_config` 和 `Co
 
 只有新建 API 来源时才导入 Target 模型，其字段覆盖名称、Vendor、Capability、Reasoning 和 Model Configuration。导入 metadata 在写入 SQLite 前递归移除 secret-like 字段。
 
-只读 `TargetModelState` 按 Target 返回 Fingerprint、`matchedModelKeys`、未匹配数量和跳过数量。5 秒轮询、发布完成和备份恢复只重新计算该状态，不再次执行自动导入。
+只读 `TargetModelState` 按 Target 返回 Fingerprint、`matchedModelKeys`、未匹配数量和跳过数量。「已配置」只表示模型当前准确存在于 WorkBuddy 或 CodeBuddy 的 `models.json`。启动、5 秒轮询、发布完成和备份恢复都会重新计算该状态；轮询、发布和恢复不再次执行自动导入。
 
 ## 9. 发布事务
 
@@ -269,7 +273,7 @@ WorkBuddy 与 CodeBuddy 的默认路径不同，但共用 `model_config` 和 `Co
 - 应用限制为单实例运行，并使用进程内 mutation lock 串行化 Gateway、凭据、Model、Settings、发布和恢复操作。模型发现、OpenRouter 查询和 Probe 在锁外执行网络请求，提交结果前重新加锁并比较 Gateway、Credential 和 Model 快照，拒绝旧响应覆盖新状态。保存 Gateway 时先写凭据再写 SQLite。SQLite 失败时，已有 Gateway 恢复旧 Token，新 Gateway 删除新 Token。删除 Gateway 时 SQLite 失败会恢复已删除的 Token；系统凭据库不可用时，操作在修改 SQLite 前终止。
 - 编辑 API Profile 时按需从系统凭据库读取 Token，仅保留在当前 Dialog 的内存状态中；默认隐藏，关闭 Dialog 后清除。
 - Token 不进入日志、错误对象、metadata、诊断输出或前端持久化状态。前端 Error、Promise rejection、Updater 和操作错误经统一结构化脱敏后，只按 `warn/error` 写入滚动日志。
-- OpenRouter Directory 请求不携带用户 Token、Gateway Base URL、模型选择或 Gateway metadata；仅在本机以 Model ID 查询已下载的公开目录快照。
+- OpenRouter 目录请求不携带用户 Token、Gateway Base URL、模型选择或 Gateway metadata；仅在本机以 Model ID 查询已下载的公开目录快照。模型详情请求的 URL 包含匹配后的 OpenRouter Model ID，但同样不携带用户 Token。
 - 启动导入期间，Token 只在 Rust 内存中用于 Gateway 匹配和凭据写入。`BootstrapData`、`TargetModelState` 和 `TargetImportReport` 不包含 Token。
 - 只有系统凭据库明确报告凭据缺失时，EveryBuddy 才从 Target 修复 Token。凭据库不可用时停止该条目导入。
 - WorkBuddy 和 CodeBuddy 要求 Token 出现在 `models.json`，发布前必须展示该限制。
@@ -286,6 +290,8 @@ WorkBuddy 与 CodeBuddy 的默认路径不同，但共用 `model_config` 和 `Co
 | `save_gateway` / `delete_gateway`     | 管理 Gateway Profile 和系统凭据                                                            |
 | `discover_models`                     | 调用 `/v1/models`，更新发现快照并保留未被上游返回的手动模型                                |
 | `add_manual_model`                    | 在指定 Gateway 下创建模型，复用 OpenRouter 缓存解析初始 Capability；未匹配时使用保守默认值 |
+| `get_openrouter_model_match`          | 查询当前模型是否存在于 OpenRouter 目录，并返回匹配后的 Model ID                            |
+| `apply_openrouter_model`              | 读取 OpenRouter 模型详情，替换 Capability、Evidence 和自动配置                             |
 | `probe_model`                         | 执行 3 个用户确认的能力请求                                                                |
 | `update_model`                        | 保存模型名称、Vendor、人工能力覆盖和完整 Model Configuration                               |
 | `get_target_statuses`                 | 读取 schema、权限、Fingerprint 和 Drift                                                    |
@@ -315,18 +321,18 @@ pnpm tauri build
 
 Fake Gateway 测试实际验证 HTTP Path、Bearer Header 和模型响应解析。Frontend 检查在 Linux 上执行一次；Rust 和 Tauri Bundle 在 macOS、Windows 上分别验证。稳定的 `CI Gate` 聚合所有适用 Job，作为 Branch Ruleset 的 Required Status Check。
 
-模型库测试覆盖多个 Gateway 保存相同上游 Model ID、手动和导入模型在 Refresh 后保留、来源变化后的 stale 隔离与恢复、刷新期间本地编辑的并发冲突，以及上游后来返回同一 ID 时不生成重复记录。Capability 测试覆盖 Gateway metadata 对 OpenRouter 的字段优先级、基础 ID、Delivery Variant、Alias 与 Canonical slug 的字段级 fallback、Pro 型号隔离、动态 Provider namespace、Reasoning Effort alias、`none` 转换、`mandatory`、默认 Effort、Temperature、Token 上限和非 text-output 硬约束；OpenRouter Directory Client 测试覆盖进程内复用和跨启动磁盘缓存。Gateway 测试覆盖远程 HTTP 拒绝、本机 HTTP、4 MiB 响应上限、10,000 模型上限、重复 Model ID、短 Token 回显隔离和 Vision challenge 响应校验。Target Import 测试覆盖数组和 wrapped schema、重复启动幂等、序列化导入、WorkBuddy 冲突优先级、Custom Protocol 精确匹配、同 URL 不同 Token、缺失或歧义凭据、来源轮换和删除 tombstone、损坏 JSON、非法参数、凭据清理失败和 Token 隔离。
+模型库测试覆盖多个 Gateway 保存相同上游 Model ID、手动和导入模型在 Refresh 后保留、来源变化后的 stale 隔离与恢复、刷新期间本地编辑的并发冲突，以及上游后来返回同一 ID 时不生成重复记录。Capability 测试覆盖 Gateway metadata 对 OpenRouter 的字段优先级、基础 ID、Delivery Variant、Alias 与 Canonical slug 的字段级 fallback、Pro 型号隔离、动态 Provider namespace、Reasoning Effort alias、`none` 转换、`mandatory`、默认 Effort、Temperature、Token 上限和非 text-output 硬约束；OpenRouter Client 测试覆盖 catalog gate、模型详情接口、Variant URL、进程内复用和跨启动磁盘缓存，并验证应用详情时保留本地路由配置。Gateway 测试覆盖远程 HTTP 拒绝、本机 HTTP、4 MiB 响应上限、10,000 模型上限、重复 Model ID、短 Token 回显隔离和 Vision challenge 响应校验。Target Import 测试覆盖数组和 wrapped schema、重复启动幂等、序列化导入、WorkBuddy 冲突优先级、Custom Protocol 精确匹配、同 URL 不同 Token、缺失或歧义凭据、来源轮换和删除 tombstone、损坏 JSON、非法参数、凭据清理失败和 Token 隔离。
 
 发布测试覆盖 WorkBuddy 单目标、CodeBuddy 单目标、双目标成功、第二目标失败补偿、首次创建文件的失败清理、API 与 Keychain revision、路径和 symlink 变化、写前 Drift、外部修改后的条件回滚、备份恢复、恢复状态保存失败回滚、每个目标保留 10 份备份，以及 SQLite 状态 transaction 失败后的文件回滚。Target 测试覆盖 8 MiB/10,000 条限制和重复 Model ID。Gateway Service 测试覆盖保存、删除和补偿失败，错误文本不得包含 Token。
 
-CI 固定使用 pnpm `11.22.0`、Node.js 22 和 Rust `1.91.1`。Release workflow 只接受属于 `main` 的版本 Tag，并在 `release` Environment 审批后构建 macOS Universal 和 Windows x64 安装包。Alpha 版本不配置 Apple 或 Windows signing identity，创建 Draft Prerelease，并验证 Tauri Updater Artifact、`latest.json`、`.sig`、安装包和 `SHA256SUMS.txt`。安装包暂未使用 Apple notarization 或 Windows Authenticode，Release 和 README 必须明确显示 `Unsigned Alpha` 警告。
+CI 固定使用 pnpm `11.22.0`、Node.js 22 和 Rust `1.91.1`。Release workflow 只接受属于 `main` 的版本 Tag，并在 `release` Environment 审批后构建 macOS Universal 和 Windows x64 安装包。当前稳定版本为 `0.1.0`；workflow 创建 Draft（非 Prerelease），并验证 Tauri Updater Artifact、`latest.json`、`.sig`、安装包和 `SHA256SUMS.txt`。安装包暂未使用 Apple notarization 或 Windows Authenticode，Release 和 README 必须明确显示未验证开发者警告。
 
 Updater private key 使用 GitHub Secrets：
 
 - `TAURI_SIGNING_PRIVATE_KEY`
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
 
-Updater public key 不是 secret，保存为 GitHub Actions Variable `TAURI_UPDATER_PUBLIC_KEY`。Release job 在构建前检查所有 Updater 签名输入，缺少任一项都会停止。Updater 签名用于防止更新资产被篡改，不能替代操作系统平台代码签名。GitHub `releases/latest` 不会选择 Prerelease，因此 Alpha 阶段使用手动更新；稳定更新通道启用后，再把应用内自动更新列为验收项。获得 Apple Developer ID 和 Windows Code Signing Certificate 后，再启用 notarization、Authenticode 和对应验证步骤。
+Updater public key 不是 secret，保存为 GitHub Actions Variable `TAURI_UPDATER_PUBLIC_KEY`。Release job 在构建前检查所有 Updater 签名输入，缺少任一项都会停止。Updater 签名用于防止更新资产被篡改，不能替代操作系统平台代码签名。GitHub `releases/latest` 指向最新稳定版本，应用通过该通道检查并安装签名有效的更新。获得 Apple Developer ID 和 Windows Code Signing Certificate 后，再启用 notarization、Authenticode 和对应验证步骤。
 
 ## 13. 兼容性假设
 

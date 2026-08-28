@@ -74,7 +74,7 @@ Dialog 包含名称、API Base URL、Token Key。主要操作是「保存并发�
 
 保存成功后自动选择 Gateway 并执行模型发现。发现本身不显示 Token 消耗警告，因为 `/v1/models` 不调用模型。
 
-左栏允许同时保存多个 API Profile。切换 Profile 时只切换当前模型上下文，其他 API 的模型、Token 引用和 Capability Evidence 保持独立。
+左栏允许同时保存多个 API Profile。标题栏使用带 Plus Icon 的紧凑「添加」Button，并通过 Tooltip 补充完整的「添加 API」含义，使创建入口明确但不挤占列表空间。切换 Profile 时只切换当前模型上下文，其他 API 的模型、Token 引用和 Capability Evidence 保持独立。
 
 ### 模型列表
 
@@ -82,6 +82,8 @@ Dialog 包含名称、API Base URL、Token Key。主要操作是「保存并发�
 - 「添加模型」打开手动模型 Dialog，Model ID 必填，显示名称和 Vendor 可选。保存时复用 OpenRouter 本地缓存，缓存缺失或过期时读取公共目录；不调用模型，不产生 Token 费用。
 - 手动模型保存后进入当前模型详情，用户可继续确认 Capability、执行 Probe 或直接人工覆盖。
 - 手动模型显示「手动」来源标记；刷新当前 API 时仍保留未被 `/v1/models` 返回的手动模型。
+- 来源标记只表示模型来自「手动」添加，不再把 Target 匹配状态显示为「已导入」。
+- 「已配置」只表示模型当前准确存在于 WorkBuddy 或 CodeBuddy 的 `models.json`。每次启动、5 秒轮询、发布完成和备份恢复后都重新计算，不沿用上次会话的结果。
 - 使用紧凑 Segmented Filter 按 All、Tool Call、Vision 和 Reasoning 筛选当前模型列表。
 - Checkbox 用于批量发布选择。
 - 启动后，Checkbox 根据当前已选且可发布的 Target 恢复为 Checked、Indeterminate 或 Unchecked，不再统一初始化为空。
@@ -98,7 +100,10 @@ Dialog 包含名称、API Base URL、Token Key。主要操作是「保存并发�
 - 每项使用 shadcn Switch。
 - 辅助文字显示当前最高优先级 Evidence。
 - 用户修改后才显示「保存模型配置」。
-- 「主动 Probe」打开确认 Dialog，明确说明会发送 3 个请求并可能产生少量 Token 费用；Custom Protocol 模式下禁用该操作。
+- Capability 标题行并排放置两个紧凑 Secondary Action：「从 OpenRouter 设置」和「主动 Probe」，避免操作按钮占满右栏宽度。
+- 「从 OpenRouter 设置」只在当前模型存在于 OpenRouter 目录时可用；未匹配时禁用并通过 Tooltip 说明原因。目录检查或详情应用期间显示 Loading Indicator，避免重复操作。
+- 「主动 Probe」打开确认 Dialog，明确说明会发送 3 个请求并可能产生少量 Token 费用；Custom Protocol 模式下禁用，并通过 Tooltip 说明协议不兼容。
+- 应用 OpenRouter 模型详情会替换 Capability、Evidence 和自动配置，但保留 `endpointOverride` 与 `useCustomProtocol`。
 - 「高级模型配置」使用原生 Details 渐进披露，不新增 Modal。默认收起，保持右栏可扫描。
 - 「模型标识」允许修改显示名称和 Vendor；Model ID 保持为上游请求 ID，不允许在此修改。
 - 「调用参数」覆盖请求地址、最大输入 Token、最大输出 Token、Temperature 和自定义协议。
@@ -196,7 +201,7 @@ system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
 
 ## 8. 状态与文案
 
-需要单独处理：没有 Gateway、远程 HTTP 地址、认证失败、网络超时、响应格式错误、响应或 Target 配置超过安全上限、重复 Model ID、模型列表为空、不同 Capability Evidence、启动导入结果、Target 未检测或 Drift、发布失败、成功回滚、回滚失败、没有备份。
+需要单独处理：没有 Gateway、远程 HTTP 地址、认证失败、网络超时、响应格式错误、响应或 Target 配置超过安全上限、重复 Model ID、模型列表为空、不同 Capability Evidence、OpenRouter 查询中、OpenRouter 未匹配、OpenRouter 应用成功或失败、启动导入结果、Target 未检测或 Drift、发布失败、成功回滚、回滚失败、没有备份。
 
 错误文案说明「发生了什么」和「如何恢复」，不能只写「操作失败」。常规更新使用 `role="status"`，错误使用 `role="alert"`。
 
