@@ -29,6 +29,7 @@ interface ModelListProps {
   selectedKeys: Set<string>;
   indeterminateKeys: Set<string>;
   presentTargetsByKey: Map<string, TargetKind[]>;
+  configuredKeys: Set<string>;
   selectedCount: number;
   activeKey: string | null;
   disabled: boolean;
@@ -48,6 +49,7 @@ export function ModelList({
   selectedKeys,
   indeterminateKeys,
   presentTargetsByKey,
+  configuredKeys,
   selectedCount,
   activeKey,
   disabled,
@@ -224,9 +226,8 @@ export function ModelList({
                           {model.metadata.everybuddySource === "manual" ? (
                             <small>{t("manualModelBadge")}</small>
                           ) : null}
-                          {model.metadata.everybuddySource ===
-                          "targetImport" ? (
-                            <small>{t("importedModelBadge")}</small>
+                          {configuredKeys.has(model.key) ? (
+                            <small>{t("configuredModelBadge")}</small>
                           ) : null}
                         </span>
                         <code className="model-row__id">{model.id}</code>

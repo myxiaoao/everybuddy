@@ -38,6 +38,10 @@ export const api = {
     call<ManagedModel>("add_manual_model", { input }),
   probeModel: (modelKey: string) =>
     call<ProbeSummary>("probe_model", { modelKey }),
+  getOpenRouterModelMatch: (modelKey: string) =>
+    call<string | null>("get_openrouter_model_match", { modelKey }),
+  applyOpenRouterModel: (modelKey: string) =>
+    call<ManagedModel>("apply_openrouter_model", { modelKey }),
   updateModel: (input: ModelUpdateInput) => {
     if (!isValidModelConfiguration(input.configuration)) {
       throw {
@@ -155,6 +159,7 @@ let demoModels: ManagedModel[] = [
     "imported",
     ["low", "medium", "high", "xhigh", "max"],
     "high",
+    "openai/gpt-5.6",
   ),
   createDemoModel(
     demoGateway.id,
@@ -376,6 +381,27 @@ async function demoCall(
         demoModels.find((item) => item.key === key) ?? demoModels[0];
       return { model, requestCount: 3, notes: [] } satisfies ProbeSummary;
     }
+    case "apply_openrouter_model": {
+      const key = String((args as { modelKey: string }).modelKey);
+      const model = demoModels.find((item) => item.key === key);
+      if (!model || !openRouterMatchId(model)) {
+        throw {
+          code: "VALIDATION_ERROR",
+          message:
+            "This model is not available in the OpenRouter model catalog",
+        } satisfies AppError;
+      }
+      const updated = applyDemoOpenRouterModel(model);
+      demoModels = demoModels.map((item) =>
+        item.key === updated.key ? updated : item,
+      );
+      return updated;
+    }
+    case "get_openrouter_model_match": {
+      const key = String((args as { modelKey: string }).modelKey);
+      const model = demoModels.find((item) => item.key === key);
+      return model ? openRouterMatchId(model) : null;
+    }
     case "update_model": {
       const input = (args as { input: ModelUpdateInput }).input;
       demoModels = demoModels.map((model) =>
@@ -474,6 +500,7 @@ function createDemoModel(
   source: "default" | "metadata" | "openRouter" | "imported" | "probe",
   supportedEfforts: ReasoningEffort[] = [],
   defaultEffort: ReasoningEffort | null = null,
+  openRouterModelId: string | null = null,
 ): ManagedModel {
   const capabilities = {
     supportsToolCall,
@@ -534,11 +561,55 @@ function createDemoModel(
         checkedAt: now,
       },
     ],
-    metadata:
-      source === "imported"
-        ? { id, owned_by: vendor, everybuddySource: "targetImport" }
-        : { id, owned_by: vendor },
+    metadata: {
+      id,
+      owned_by: vendor,
+      ...(source === "imported" ? { everybuddySource: "targetImport" } : {}),
+      ...(openRouterModelId || source === "openRouter"
+        ? {
+            everybuddyOpenRouterMatch: {
+              source: "openrouter",
+              modelId: openRouterModelId ?? `${vendor}/${id}`,
+              supportsTextOutput: true,
+            },
+          }
+        : {}),
+    },
     updatedAt: now,
+  };
+}
+
+function openRouterMatchId(model: ManagedModel) {
+  const match = model.metadata.everybuddyOpenRouterMatch;
+  if (!match || typeof match !== "object" || !("modelId" in match)) return null;
+  return typeof match.modelId === "string" && match.modelId.trim()
+    ? match.modelId
+    : null;
+}
+
+function applyDemoOpenRouterModel(model: ManagedModel): ManagedModel {
+  const checkedAt = new Date().toISOString();
+  return {
+    ...model,
+    configuration: {
+      ...model.configuration,
+      maxInputTokens: 200_000,
+      maxOutputTokens: 32_000,
+      temperature: null,
+    },
+    evidence: ["toolCall", "images", "reasoning"].map((capability) => ({
+      capability: capability as "toolCall" | "images" | "reasoning",
+      value:
+        capability === "toolCall"
+          ? model.capabilities.supportsToolCall
+          : capability === "images"
+            ? model.capabilities.supportsImages
+            : model.capabilities.supportsReasoning,
+      source: "openRouter" as const,
+      detail: "OpenRouter model detail",
+      checkedAt,
+    })),
+    updatedAt: checkedAt,
   };
 }
 

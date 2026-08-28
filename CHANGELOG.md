@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-28
+
+### Added
+
+- 支持从 OpenRouter 模型详情直接应用 Capability 和自动模型配置。
+
+### Changed
+
+- WorkBuddy 和 CodeBuddy 的发布名称增加 API 来源前缀，Model ID 保持不变。
+- 每次启动时根据当前目标文件重新计算模型的「已配置」状态。
+- 同步更新 README、设计、安全、故障排查说明和界面截图。
+
 ## [0.1.0] - 2026-08-27
 
 ### Changed
@@ -34,6 +46,7 @@
 - 在 Gateway 刷新、模型 Probe 和配置发布期间检测并发修改，避免旧请求覆盖新状态。
 - 强化 Target 路径、Credential 来源、发布状态和备份回滚校验，避免部分失败留下不一致状态。
 
-[Unreleased]: https://github.com/myxiaoao/everybuddy/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/myxiaoao/everybuddy/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/myxiaoao/everybuddy/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/myxiaoao/everybuddy/compare/v0.1.0-alpha.1...v0.1.0
 [0.1.0-alpha.1]: https://github.com/myxiaoao/everybuddy/releases/tag/v0.1.0-alpha.1

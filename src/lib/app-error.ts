@@ -94,6 +94,12 @@ function localizedValidationError(message: string, t: Translator) {
       recovery: "errorDuplicateModelRecovery",
     },
     {
+      messages: ["This model is not available in the OpenRouter model catalog"],
+      title: "errorOpenRouterModelTitle",
+      body: "errorOpenRouterModelMessage",
+      recovery: "errorOpenRouterModelRecovery",
+    },
+    {
       messages: [
         "Enter a valid HTTP or HTTPS API URL",
         "Only HTTP and HTTPS gateway URLs are supported",

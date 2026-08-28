@@ -40,6 +40,20 @@ describe("deriveModelSelection", () => {
     expect(selection.presentTargetsByKey.get("gateway::partial")).toEqual([
       "workbuddy",
     ]);
+    expect([...selection.configuredKeys]).toEqual([
+      "gateway::all",
+      "gateway::partial",
+    ]);
+  });
+
+  it("derives configured models from every target regardless of publish selection", () => {
+    const selection = deriveModelSelection(models, states, [], new Map());
+
+    expect([...selection.checkedKeys]).toEqual([]);
+    expect([...selection.configuredKeys]).toEqual([
+      "gateway::all",
+      "gateway::partial",
+    ]);
   });
 
   it("keeps explicit overrides when target scope changes", () => {

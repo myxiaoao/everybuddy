@@ -419,7 +419,10 @@ fn model_identity(model: &Value) -> Option<ModelIdentity> {
 pub fn model_config(model: &ManagedModel, gateway: &GatewayProfile, token: &str) -> Value {
     let mut object = Map::new();
     object.insert("id".to_string(), json!(model.id));
-    object.insert("name".to_string(), json!(model.name));
+    object.insert(
+        "name".to_string(),
+        json!(prefixed_model_name(&gateway.name, &model.name)),
+    );
     object.insert("vendor".to_string(), json!(model.vendor));
     object.insert(
         "url".to_string(),
@@ -481,6 +484,15 @@ pub fn model_config(model: &ManagedModel, gateway: &GatewayProfile, token: &str)
         object.insert("reasoning".to_string(), Value::Object(reasoning));
     }
     Value::Object(object)
+}
+
+fn prefixed_model_name(gateway_name: &str, model_name: &str) -> String {
+    let prefix = format!("{gateway_name} · ");
+    if model_name.starts_with(&prefix) {
+        model_name.to_string()
+    } else {
+        format!("{prefix}{model_name}")
+    }
 }
 
 pub fn fingerprint(bytes: &[u8]) -> String {
@@ -932,7 +944,7 @@ mod tests {
         let output = model_config(&model, &gateway, "secret");
 
         assert_eq!(output["id"], "gpt-5");
-        assert_eq!(output["name"], "GPT-5");
+        assert_eq!(output["name"], "Gateway · GPT-5");
         assert_eq!(output["vendor"], "openai");
         assert_eq!(output["url"], "https://proxy.example.com/route");
         assert_eq!(output["apiKey"], "secret");
@@ -949,6 +961,14 @@ mod tests {
         assert_eq!(output["reasoning"]["summary"], "concise");
         assert_eq!(output["reasoning"]["canDisableThinking"], false);
         assert_eq!(output["reasoning"]["supportedEfforts"][5], "max");
+    }
+
+    #[test]
+    fn does_not_duplicate_an_existing_gateway_name_prefix() {
+        assert_eq!(
+            prefixed_model_name("Gateway", "Gateway · GPT-5"),
+            "Gateway · GPT-5"
+        );
     }
 
     #[test]

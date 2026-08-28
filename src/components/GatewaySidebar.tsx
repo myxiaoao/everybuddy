@@ -77,14 +77,16 @@ export function GatewaySidebar({
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
-              variant="ghost"
-              size="icon"
+              className="gateway-add-button"
+              variant="secondary"
+              size="sm"
               type="button"
               onClick={onAdd}
               aria-label={t("addGateway")}
               disabled={disabled}
             >
-              <Plus aria-hidden="true" size={18} />
+              <Plus aria-hidden="true" size={14} />
+              <span>{t("addGatewayShort")}</span>
             </Button>
           </TooltipTrigger>
           <TooltipContent>{t("addGateway")}</TooltipContent>

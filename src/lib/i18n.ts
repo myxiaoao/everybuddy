@@ -39,7 +39,7 @@ const messages = {
     manualModelVendorHint:
       "留空时使用 OpenRouter 匹配的提供商；无法识别时默认为 custom。",
     manualModelBadge: "手动",
-    importedModelBadge: "已导入",
+    configuredModelBadge: "已配置",
     manualModelAdded: "已添加模型 {name}",
     models: "模型",
     modelCount: "{count} 个可用模型",
@@ -127,6 +127,10 @@ const messages = {
     summary_detailed: "详细",
     saveModelConfig: "保存模型配置",
     modelConfigSaved: "模型配置已保存",
+    applyOpenRouter: "从 OpenRouter 设置",
+    openRouterApplyHint: "使用 OpenRouter 模型详情更新能力与自动配置",
+    openRouterUnavailable: "未在 OpenRouter 模型目录中匹配到此模型",
+    openRouterApplied: "已使用 OpenRouter 模型信息更新配置",
     probe: "主动探测",
     probeTitle: "执行能力探测",
     probeUnavailableCustomProtocol: "自定义协议模式不支持主动探测",
@@ -249,6 +253,11 @@ const messages = {
     errorValidationTitle: "无法提交当前内容",
     errorValidationMessage: "当前输入或选择不符合操作要求。",
     errorValidationRecovery: "检查必填项、模型选择和发布目标后重试。",
+    errorOpenRouterModelTitle: "OpenRouter 未找到此模型",
+    errorOpenRouterModelMessage:
+      "当前 Model ID 未在 OpenRouter 公共模型目录中匹配到。",
+    errorOpenRouterModelRecovery:
+      "确认 Model ID 和 vendor，刷新模型列表后重试。",
     errorDuplicateModelTitle: "模型已存在",
     errorDuplicateModelMessage: "当前 API 来源中已有相同的 Model ID。",
     errorDuplicateModelRecovery: "使用其他 Model ID，或编辑已有模型。",
@@ -322,7 +331,7 @@ const messages = {
     manualModelVendorHint:
       "Leave blank to use the vendor matched by OpenRouter; unknown vendors default to custom.",
     manualModelBadge: "Manual",
-    importedModelBadge: "Imported",
+    configuredModelBadge: "Configured",
     manualModelAdded: "Added model {name}",
     models: "Models",
     modelCount: "{count} available",
@@ -417,6 +426,12 @@ const messages = {
     summary_detailed: "Detailed",
     saveModelConfig: "Save model configuration",
     modelConfigSaved: "Model configuration saved",
+    applyOpenRouter: "Apply OpenRouter",
+    openRouterApplyHint:
+      "Update capabilities and automatic configuration from OpenRouter model details",
+    openRouterUnavailable:
+      "This model was not matched in the OpenRouter model catalog",
+    openRouterApplied: "Applied OpenRouter model information",
     probe: "Run probe",
     probeTitle: "Run capability probe",
     probeUnavailableCustomProtocol:
@@ -567,6 +582,11 @@ const messages = {
       "The current input or selection does not meet the operation requirements.",
     errorValidationRecovery:
       "Check required fields, selected models, and publish targets, then try again.",
+    errorOpenRouterModelTitle: "Model not found on OpenRouter",
+    errorOpenRouterModelMessage:
+      "The current Model ID was not matched in OpenRouter's public model catalog.",
+    errorOpenRouterModelRecovery:
+      "Check the Model ID and vendor, refresh the model list, and try again.",
     errorDuplicateModelTitle: "Model already exists",
     errorDuplicateModelMessage:
       "The current API source already contains this Model ID.",

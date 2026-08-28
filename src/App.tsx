@@ -98,6 +98,10 @@ function App() {
   );
   const [editingGatewayToken, setEditingGatewayToken] = useState("");
   const [probeDialog, setProbeDialog] = useState(false);
+  const [applyingOpenRouter, setApplyingOpenRouter] = useState(false);
+  const [openRouterModelMatches, setOpenRouterModelMatches] = useState<
+    Record<string, boolean>
+  >({});
   const [publishDialog, setPublishDialog] = useState(false);
   const [publishPreview, setPublishPreview] = useState<PublishPreview | null>(
     null,
@@ -163,6 +167,30 @@ function App() {
     );
   }, [gatewayModels, query]);
   const activeModel = models.find((model) => model.key === activeKey) ?? null;
+  useEffect(() => {
+    if (!activeModel) return;
+    const modelKey = activeModel.key;
+    let cancelled = false;
+    void api
+      .getOpenRouterModelMatch(modelKey)
+      .then((match) => {
+        if (cancelled) return;
+        setOpenRouterModelMatches((current) => ({
+          ...current,
+          [modelKey]: Boolean(match),
+        }));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setOpenRouterModelMatches((current) => ({
+          ...current,
+          [modelKey]: false,
+        }));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeModel]);
   const publishableTargetKinds = useMemo(
     () => targets.filter(isTargetPublishable).map((target) => target.kind),
     [targets],
@@ -538,6 +566,29 @@ function App() {
     runAfterDiscard(() => setProbeDialog(true));
   }
 
+  function requestApplyOpenRouter() {
+    if (!activeModel) return;
+    const modelKey = activeModel.key;
+    runAfterDiscard(() => applyOpenRouter(modelKey));
+  }
+
+  async function applyOpenRouter(modelKey: string) {
+    setBusy(true);
+    setApplyingOpenRouter(true);
+    setError(null);
+    try {
+      const updated = await api.applyOpenRouterModel(modelKey);
+      replaceModel(updated);
+      setDirtyModelKey(null);
+      setStatusMessage({ key: "openRouterApplied" });
+    } catch (caught) {
+      showError(caught);
+    } finally {
+      setApplyingOpenRouter(false);
+      setBusy(false);
+    }
+  }
+
   async function saveModel(input: ModelUpdateInput) {
     setBusy(true);
     try {
@@ -830,6 +881,7 @@ function App() {
               selectedKeys={selectedKeys}
               indeterminateKeys={modelSelection.indeterminateKeys}
               presentTargetsByKey={modelSelection.presentTargetsByKey}
+              configuredKeys={modelSelection.configuredKeys}
               selectedCount={selectedModelCount}
               activeKey={activeKey}
               disabled={selectedGatewayRefreshing}
@@ -869,6 +921,14 @@ function App() {
             t={t}
             onSaveModel={(input) => void saveModel(input)}
             onProbe={openProbe}
+            onApplyOpenRouter={requestApplyOpenRouter}
+            applyingOpenRouter={applyingOpenRouter}
+            openRouterAvailable={Boolean(
+              activeModel && openRouterModelMatches[activeModel.key],
+            )}
+            checkingOpenRouter={Boolean(
+              activeModel && !(activeModel.key in openRouterModelMatches),
+            )}
             onToggleTarget={(target) => void toggleTarget(target)}
             onDirtyChange={handleDirtyChange}
           />

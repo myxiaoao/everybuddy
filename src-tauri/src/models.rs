@@ -163,6 +163,48 @@ pub struct ManagedModel {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelOrigin {
+    Manual,
+    Target,
+}
+
+impl ModelOrigin {
+    const METADATA_KEY: &'static str = "everybuddySource";
+
+    pub fn from_metadata(metadata: &Value) -> Option<Self> {
+        match metadata.get(Self::METADATA_KEY).and_then(Value::as_str) {
+            Some("manual") => Some(Self::Manual),
+            Some("targetImport") => Some(Self::Target),
+            _ => None,
+        }
+    }
+
+    pub fn write_to_metadata(self, metadata: &mut Value) {
+        if !metadata.is_object() {
+            *metadata = Value::Object(Default::default());
+        }
+        metadata[Self::METADATA_KEY] = Value::String(self.storage_value().to_string());
+    }
+
+    fn storage_value(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Target => "targetImport",
+        }
+    }
+}
+
+impl ManagedModel {
+    pub fn origin(&self) -> Option<ModelOrigin> {
+        ModelOrigin::from_metadata(&self.metadata)
+    }
+
+    pub fn is_locally_managed(&self) -> bool {
+        self.origin().is_some()
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelUpdateInput {
@@ -409,7 +451,9 @@ pub struct ProbeSummary {
 
 #[cfg(test)]
 mod tests {
-    use super::EvidenceSource;
+    use serde_json::json;
+
+    use super::{EvidenceSource, ModelOrigin};
 
     #[test]
     fn legacy_catalog_evidence_deserializes_as_default() {
@@ -417,5 +461,18 @@ mod tests {
 
         assert_eq!(source, EvidenceSource::Default);
         assert_eq!(serde_json::to_string(&source).unwrap(), "\"default\"");
+    }
+
+    #[test]
+    fn target_origin_uses_compatible_metadata_marker() {
+        let mut metadata = json!({"id": "model"});
+
+        ModelOrigin::Target.write_to_metadata(&mut metadata);
+
+        assert_eq!(metadata["everybuddySource"], "targetImport");
+        assert_eq!(
+            ModelOrigin::from_metadata(&metadata),
+            Some(ModelOrigin::Target)
+        );
     }
 }

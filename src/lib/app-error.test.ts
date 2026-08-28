@@ -3,6 +3,23 @@ import { createTranslator } from "./i18n";
 import { localizedError } from "./app-error";
 
 describe("localizedError", () => {
+  it("explains when a model is absent from the OpenRouter catalog", () => {
+    expect(
+      localizedError(
+        {
+          code: "VALIDATION_ERROR",
+          message:
+            "This model is not available in the OpenRouter model catalog",
+        },
+        createTranslator("zh-CN"),
+      ),
+    ).toEqual({
+      title: "OpenRouter 未找到此模型",
+      message: "当前 Model ID 未在 OpenRouter 公共模型目录中匹配到。",
+      recovery: "确认 Model ID 和 vendor，刷新模型列表后重试。",
+    });
+  });
+
   const t = createTranslator("zh-CN");
 
   it.each([

@@ -10,141 +10,40 @@
 
 </div>
 
-EveryBuddy 是一款面向个人开发者的开源桌面应用，用于管理多个 OpenAI-compatible API 来源，并把选中的模型配置发布到 WorkBuddy、CodeBuddy 或同时发布到两个产品。
+EveryBuddy 是一款面向个人开发者的开源桌面应用。它集中管理多个 OpenAI-compatible API 来源，再把选中的模型配置发布到 WorkBuddy、CodeBuddy 或两个目标。
 
-> 当前稳定版本为 `0.1.0`。发布操作会备份并校验目标配置，但仍建议把现有 `models.json` 纳入本机备份。
+> 当前稳定版本：`0.1.1`。EveryBuddy 会在发布前备份并校验目标配置，仍建议将现有 `models.json` 纳入本机备份。
 
 ![EveryBuddy 工作区](docs/assets/everybuddy-workspace.png)
 
-## 核心流程
+## 能做什么
 
-```mermaid
-flowchart TD
-    Start([启动 EveryBuddy]) --> Read[读取 WorkBuddy 和 CodeBuddy<br/>现有 models.json]
-    Read --> Existing{发现既有配置？}
-    Existing -->|是| Import[导入 API、模型、发布选择状态<br/>以及已有 Target Evidence]
-    Existing -->|否| Add[添加 API 来源<br/>Base URL 和 Token]
-    Add --> Discover[通过 GET /v1/models 发现模型]
-
-    subgraph Normalize[能力归一化]
-        direction TD
-        Collect[收集当前模型的全部 Evidence]
-        Gateway[解析 Gateway metadata<br/>Capability、Modality、Parameter、Reasoning]
-        OpenRouter[首次发现或手动添加时按需查询<br/>按 Model ID 精确匹配 OpenRouter<br/>仅补齐 Gateway 缺失字段]
-        Imported[读取 Target 导入值<br/>保留已有能力与模型配置]
-        Probe[主动 Probe（可选）<br/>仅标准 Chat Completions<br/>最多 3 个请求，只记录可验证结果]
-        Manual[人工调整（可选）<br/>按单项能力写入 Manual Evidence]
-        Default[缺少证据时使用保守默认值<br/>Tool Call、Vision、Reasoning 均为 false]
-
-        Collect --> Gateway
-        Collect --> OpenRouter
-        Collect --> Imported
-        Collect -. 用户确认 .-> Probe
-        Collect -. 用户保存 .-> Manual
-        Collect --> Default
-
-        Gateway --> Gather[汇总 Capability Evidence]
-        OpenRouter --> Gather
-        Imported --> Gather
-        Probe --> Gather
-        Manual --> Gather
-        Default --> Gather
-
-        Gather --> NonText{当前有效来源明确为<br/>非 text-output？}
-        NonText -->|是| Block[强制关闭聊天能力<br/>不生成聊天调用参数]
-        NonText -->|否| Resolve[按单项能力选择最高优先级 Evidence<br/>Manual → Probe → Imported<br/>Gateway metadata → OpenRouter → Default]
-        Resolve --> Capability[生成标准能力集<br/>Tool Call、Vision、Reasoning、Reasoning Effort]
-        Capability --> Project[生成模型调用配置<br/>保留 Target 导入与人工配置<br/>Gateway 优先，OpenRouter 补缺]
-        Project --> Validate[校验 Token 上限、Temperature 和 Reasoning<br/>移除不支持或不安全的值]
-        Block --> Result[输出标准化能力、配置和 Evidence]
-        Validate --> Result
-    end
-
-    Import --> Collect
-    Discover --> Collect
-    Result --> Select[选择模型和发布目标]
-    Select --> Preview[逐目标预览配置差异]
-    Preview --> Backup[备份目标配置]
-    Backup --> Publish[写入 WorkBuddy 和 CodeBuddy]
-    Publish --> Verify{写入校验}
-    Verify -->|全部成功| Done([配置生效])
-    Verify -->|部分失败| Rollback[补偿回滚已写入的目标]
-    Rollback --> Report([报告各目标结果])
-```
-
-主动 Probe 和人工调整都会新增独立的 Capability Evidence，并重新执行能力归一化。它们的优先级高于自动来源，但不能绕过非 text-output 硬约束。
-
-## 工作方式
-
-1. 添加 API Base URL 和 Bearer Token。Token 保存到 macOS Keychain 或 Windows Credential Manager。
-2. 通过 `GET /v1/models` 发现模型。如果 API 没有返回所需模型，可以在该 API 来源下手动添加。
-3. 检查模型能力和参数。EveryBuddy 会匹配 OpenRouter 公开模型目录，也支持主动 Probe 和人工调整。
-4. 选择 WorkBuddy、CodeBuddy 或两个目标，预览差异后发布。
-5. 发布前自动备份目标配置。双目标发布发生部分失败时，EveryBuddy 会恢复已经写入的目标，并报告每个目标的结果。
-
-EveryBuddy 启动时会读取两个目标已有的 `models.json`。API 来源不存在时，应用会创建对应来源并导入模型；API 来源已经存在时，只匹配模型和发布选择状态，不覆盖本地模型配置。再次发布时，未选中且确认属于当前 API 来源的模型会从目标配置中移除；无法确认归属的本地或外部模型会保留。
-
-## 主要功能
-
-- 同时管理多个 API 来源，每个来源独立保存模型和凭据引用。
-- 自动发现模型，也可手动添加 API 未返回的模型。
-- 配置 Tool Call、Vision、Reasoning、Reasoning Effort 和高级模型参数。
-- 发布完整的 WorkBuddy、CodeBuddy 模型字段，包括 Token 上限、Temperature、Reasoning 配置和 Custom Protocol 设置。
-- 分别发布到 WorkBuddy、CodeBuddy，或使用补偿式事务同时发布到两个目标。
-- 发布前预览新增和更新内容，保留未知字段，并检测外部配置变化。
-- 为每个目标保留最近 10 份备份，支持查看和恢复。
+- 管理多个 API 来源，Token 保存到 macOS Keychain 或 Windows Credential Manager。
+- 通过 `GET /v1/models` 发现模型，也可以手动添加未返回的模型。
+- 识别 Tool Call、Vision、Reasoning、Reasoning Effort 和常用模型参数。
+- 从 OpenRouter 读取指定模型的公开信息，或通过主动 Probe 和人工设置补充能力。
+- 分别发布到 WorkBuddy、CodeBuddy，或通过补偿式事务同时发布到两个目标。
+- 发布前预览差异并检测外部改动，每个目标保留最近 10 份可恢复备份。
 - 支持简体中文、English，以及 Light、Dark、System 主题。
 
-## 发布前预览
+## 使用流程
 
-发布前会逐目标展示新增、更新、移除和不变的模型数量。存在 Model ID 冲突时，需要明确确认是否使用当前 API 来源替换目标中的同名模型。
+```mermaid
+flowchart LR
+    Source[添加 API 来源] --> Model[发现或手动添加模型]
+    Model --> Capability[确认模型能力]
+    Capability --> Target[选择 WorkBuddy 或 CodeBuddy]
+    Target --> Preview[预览配置差异]
+    Preview --> Publish[备份并写入]
+```
 
-![EveryBuddy 发布前预览](docs/assets/everybuddy-publish-preview.png)
+1. 添加 API Base URL 和 Bearer Token。
+2. 发现模型，或在当前 API 来源下手动添加模型。
+3. 检查模型能力与调用参数。可以采用自动解析结果、从 OpenRouter 设置、主动 Probe 或人工设置。
+4. 选择模型和发布目标，确认新增、更新、移除与冲突后发布。
+5. 每次启动时，EveryBuddy 都会重新读取 WorkBuddy 和 CodeBuddy 的 `models.json`。只有当前目标文件中存在并准确匹配的模型才显示「已配置」。
 
-## API 兼容要求
-
-EveryBuddy 首版支持使用 Bearer Token 的 OpenAI-compatible API：
-
-| 项目       | 要求                              |
-| ---------- | --------------------------------- |
-| 模型发现   | `GET {apiRoot}/models`            |
-| 主动 Probe | `POST {apiRoot}/chat/completions` |
-| 认证       | `Authorization: Bearer {token}`   |
-| 远程 API   | 必须使用 HTTPS                    |
-| 本机 API   | loopback 地址可以使用 HTTP        |
-
-本机 loopback 地址包括 `localhost`、`127.0.0.1` 和 `::1`。API Base URL 可以填写域名根地址、`/v1` API Root 或完整的 `/v1/models` 地址，EveryBuddy 会统一转换为 API Root。首版不支持非 Bearer 认证，也不对非 OpenAI-compatible 协议作兼容承诺。
-
-## 模型能力与思考强度
-
-模型能力按以下优先级解析：人工设置、成功的主动 Probe、已有目标配置的导入值、API 返回的 Gateway metadata、OpenRouter、保守默认值。Gateway 或 OpenRouter 明确标记为非 text-output 的模型始终不投影聊天能力，Probe、导入记录或人工设置不能将其重新启用。Probe 只在用户确认后执行，一次最多发送 3 个最小请求，可能产生少量 Token 消耗。
-
-EveryBuddy 在首次模型发现或手动添加模型时按需读取 OpenRouter 公开模型目录。请求不会携带用户 Token、API Base URL 或 API metadata。成功结果会在本机缓存 6 小时；请求失败后 15 分钟内不重复请求。
-
-OpenRouter 明确返回 `reasoning.supported_efforts` 时，EveryBuddy 会将其中的 `minimal`、`low`、`medium`、`high`、`xhigh` 和 `max` 写入 `reasoning.supportedEfforts`。`none` 表示允许关闭思考，不作为强度档位写入；`reasoning.default_effort` 和 `reasoning.mandatory` 分别映射为默认思考强度和是否允许关闭思考。OpenRouter 没有返回明确范围时，EveryBuddy 不会仅凭 `reasoning_effort` 参数名称推测具体档位。
-
-OpenRouter 还会补齐 Gateway metadata 缺失的最大输入 Token、最大输出 Token、非空默认 Temperature 和 Reasoning 信息。Gateway 明确返回的字段优先；已有 Target 导入配置和人工设置也不会被自动匹配覆盖。
-
-同一模型存在基础记录、Batch/Free 变体、Alias 或带日期的 Canonical slug 时，EveryBuddy 优先使用完整 Model ID 对应记录的明确字段，只用关联的基础记录补齐缺失字段；只有查询的 Canonical slug 没有精确记录时才解析到基础记录。匹配不使用前缀模糊规则，因此 `openai/gpt-5.6-sol` 和 `openai/gpt-5.6-sol-pro` 始终独立。发布时保留 Gateway 实际返回的 Model ID。非 text-output 模型不会被错误映射为 WorkBuddy/CodeBuddy 的聊天参数；旧版 OpenRouter 匹配记录缺少 text-output eligibility 时按未验证处理，刷新模型后才重新投影聊天能力。
-
-Vision Probe 使用固定四色条 challenge，文本提示不包含答案，并且只有响应准确返回预期顺序时才确认图片能力。重新 Probe 会替换旧 Probe Evidence；修改 `endpointOverride` 或切换 `useCustomProtocol` 也会移除旧 Evidence。Custom Protocol 必须配置完整 `endpointOverride`，发布时不追加 `/v1` 或 `/chat/completions`，因此不执行基于 Chat Completions 的能力 Probe。旧版曾把 Custom Protocol 地址归一化为 API Root，升级后会清空这类历史地址，必须重新填写完整请求 URL。WorkBuddy 5.3.14 runtime 的 Reasoning Summary 仅接受 `auto`、`concise`、`detailed`；历史数据库中的 `always`、`never` 仍可读取，但必须改成受支持值后才能保存或发布。
-
-## 配置目标
-
-| 平台    | WorkBuddy                              | CodeBuddy                              |
-| ------- | -------------------------------------- | -------------------------------------- |
-| macOS   | `~/.workbuddy/models.json`             | `~/.codebuddy/models.json`             |
-| Windows | `%USERPROFILE%\.workbuddy\models.json` | `%USERPROFILE%\.codebuddy\models.json` |
-
-EveryBuddy 支持模型数组和包含 `models` 数组的旧包装格式。更新已有模型时，应用会保留未知顶层字段、未知模型字段和未知 Reasoning 字段。写入前如果检测到其他程序修改了目标文件，本次发布会停止并要求重新加载差异。
-
-WorkBuddy 与 CodeBuddy 使用不同配置路径，但共享同一套序列化规则；同一次双目标发布写入的模型配置内容一致。
-
-## Token 安全边界
-
-EveryBuddy 不把明文 Token 写入 SQLite、诊断日志或前端持久化状态。WorkBuddy 和 CodeBuddy 的配置协议要求 `models.json` 包含明文 `apiKey`，因此发布模型时必须把 Token 写入目标配置。目标配置的备份也可能包含相同 Token。
-
-不要把目标配置、备份或未经检查的诊断日志提交到 Git、上传到公开附件，或存放在不受保护的同步目录。详细边界和日志位置见 [SECURITY.md](SECURITY.md) 与[故障排查](docs/TROUBLESHOOTING.md)。
+API 来源不存在时，应用会根据目标文件创建对应来源并导入模型。API 来源已经存在时，应用只重新匹配当前模型和发布选择，不覆盖本地模型配置。再次发布会移除确认属于当前 API 来源但未选中的模型，无法确认归属的本地或外部模型仍会保留。
 
 ## 下载安装
 
@@ -166,7 +65,50 @@ EveryBuddy 不把明文 Token 写入 SQLite、诊断日志或前端持久化状�
 
 - Windows：在 SmartScreen 中选择「更多信息 → 仍要运行」。
 
-Tauri Updater 资产使用独立 Ed25519 key 签名，更新客户端不会接受签名校验失败的文件。GitHub 的 `releases/latest` 指向最新稳定版本，应用可以检查并安装通过签名校验的更新；平台签名补齐前，更新后的应用仍可能触发 Gatekeeper 或 SmartScreen 警告。
+Tauri Updater 资产使用独立 Ed25519 key 签名，更新客户端不会接受签名校验失败的文件。GitHub 的 `releases/latest` 指向最新稳定版本，应用可以检查并安装通过签名校验的更新。平台签名补齐前，更新后的应用仍可能触发 Gatekeeper 或 SmartScreen 警告。
+
+## 模型能力
+
+自动解析的 Evidence 优先级为：人工设置、成功的主动 Probe、已有目标配置的导入值、Gateway metadata、OpenRouter、保守默认值。Gateway 或 OpenRouter 明确标记为非 text-output 的模型不会生成聊天能力和调用参数。
+
+模型发现和手动添加会按需读取 [OpenRouter 模型目录](https://openrouter.ai/api/v1/models?output_modalities=all)。只有目录中存在的模型才能使用「从 OpenRouter 设置」。确认匹配后，EveryBuddy 请求 `GET https://openrouter.ai/api/v1/model/{author}/{slug}`，用返回结果更新模型能力和参数，同时保留 `endpointOverride` 与 `useCustomProtocol`。
+
+OpenRouter 请求不携带用户 Token、API Base URL 或 Gateway metadata。模型目录成功结果在本机缓存 6 小时，请求失败后 15 分钟内不重复请求。自动解析时，Gateway metadata 的明确字段优先，OpenRouter 只补充缺失字段。普通模型刷新不会覆盖已有 Target 导入配置或人工配置。
+
+主动 Probe 只在确认后执行，一次最多发送 3 个最小请求，可能产生少量 Token 消耗。Custom Protocol 不执行基于 Chat Completions 的 Probe。Evidence、Reasoning、Alias 和 Canonical slug 的完整规则见 [技术设计](docs/TECHNICAL_DESIGN.md)。
+
+## 发布目标
+
+| 平台    | WorkBuddy                              | CodeBuddy                              |
+| ------- | -------------------------------------- | -------------------------------------- |
+| macOS   | `~/.workbuddy/models.json`             | `~/.codebuddy/models.json`             |
+| Windows | `%USERPROFILE%\.workbuddy\models.json` | `%USERPROFILE%\.codebuddy\models.json` |
+
+WorkBuddy 与 CodeBuddy 使用相同的模型序列化规则。发布后的显示名称采用 `API 来源名称 · 模型名称`，上游 Model ID 保持不变。双目标发布发生部分失败时，EveryBuddy 会恢复已经写入的目标，并分别报告结果。
+
+EveryBuddy 支持模型数组和包含 `models` 数组的旧包装格式。更新已有模型时，应用会保留未知顶层字段、未知模型字段和未知 Reasoning 字段。写入前如果检测到其他程序修改了目标文件，本次发布会停止并要求重新加载差异。
+
+![EveryBuddy 发布前预览](docs/assets/everybuddy-publish-preview.png)
+
+## API 兼容要求
+
+EveryBuddy 当前支持使用 Bearer Token 的 OpenAI-compatible API：
+
+| 项目       | 要求                              |
+| ---------- | --------------------------------- |
+| 模型发现   | `GET {apiRoot}/models`            |
+| 主动 Probe | `POST {apiRoot}/chat/completions` |
+| 认证       | `Authorization: Bearer {token}`   |
+| 远程 API   | 必须使用 HTTPS                    |
+| 本机 API   | loopback 地址可以使用 HTTP        |
+
+本机 loopback 地址包括 `localhost`、`127.0.0.1` 和 `::1`。API Base URL 可以填写域名根地址、`/v1` API Root 或完整的 `/v1/models` 地址，EveryBuddy 会统一转换为 API Root。当前版本不支持非 Bearer 认证，也不对非 OpenAI-compatible 协议作兼容承诺。
+
+## Token 安全边界
+
+EveryBuddy 不把明文 Token 写入 SQLite、诊断日志或前端持久化状态。WorkBuddy 和 CodeBuddy 的配置协议要求 `models.json` 包含明文 `apiKey`，发布模型时必须把 Token 写入目标配置，目标配置的备份也可能包含相同 Token。
+
+不要把目标配置、备份或未经检查的诊断日志提交到 Git、上传到公开附件，或存放在不受保护的同步目录。详细边界和日志位置见 [安全策略](SECURITY.md) 与 [故障排查](docs/TROUBLESHOOTING.md)。
 
 ## 本地开发
 
@@ -192,7 +134,7 @@ pnpm dev
 
 打开 `http://localhost:1420/?demo=1`。Demo 使用本地模拟数据，不访问目标配置、API 或系统凭据库。
 
-## 验证
+验证完整代码库：
 
 ```bash
 pnpm verify
