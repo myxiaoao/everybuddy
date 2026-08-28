@@ -1,6 +1,6 @@
 # 发布流程
 
-EveryBuddy 当前发布通道为 Stable。当前版本 `0.1.0` 对应 Tag `v0.1.0`，GitHub Release 必须保持正式发行状态。
+EveryBuddy 当前发布通道为 Stable。当前版本 `0.1.1` 对应 Tag `v0.1.1`，GitHub Release 必须保持正式发行状态。
 
 ## 前置条件
 

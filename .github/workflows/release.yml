@@ -128,14 +128,14 @@ jobs:
           tagName: v__VERSION__
           releaseName: EveryBuddy v__VERSION__
           releaseBody: |
-            EveryBuddy 0.1.0 is the first stable release.
+            EveryBuddy 0.1.1 improves model capability setup and target configuration tracking.
 
             ## Highlights
 
-            - Model capabilities now prefer gateway metadata, use exact OpenRouter matches, and keep non-text models out of chat configuration.
-            - WorkBuddy and CodeBuddy publishing now removes unselected models managed by the same API source while preserving unrelated local entries.
-            - Dialog errors stay with the active task, unsaved edits are preserved, and Chinese and English copy is more consistent.
-            - The workspace, target icons, and macOS Dock icon now align and render consistently.
+            - Apply OpenRouter model details directly to catalog-matched models while preserving local routing settings.
+            - Reconcile the Configured state from the current WorkBuddy and CodeBuddy `models.json` files on startup and refresh.
+            - Prefix published model names with their API source names while preserving upstream model IDs.
+            - Refine API source and model capability actions, documentation, and screenshots.
 
             ## Unsigned Installers
 
