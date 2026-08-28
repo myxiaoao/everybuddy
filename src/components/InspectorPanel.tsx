@@ -6,8 +6,10 @@ import {
   CircleAlert,
   CircleCheckBig,
   CircleDashed,
+  CloudDownload,
   GitCompareArrows,
   Image,
+  LoaderCircle,
   Sparkles,
   SlidersHorizontal,
   TriangleAlert,
@@ -41,6 +43,10 @@ interface InspectorPanelProps {
   t: ReturnType<typeof createTranslator>;
   onSaveModel: (input: ModelUpdateInput) => void;
   onProbe: () => void;
+  onApplyOpenRouter: () => void;
+  applyingOpenRouter: boolean;
+  openRouterAvailable: boolean;
+  checkingOpenRouter: boolean;
   onToggleTarget: (target: TargetKind) => void;
   onDirtyChange: (modelKey: string | null, changed: boolean) => void;
 }
@@ -54,6 +60,10 @@ export function InspectorPanel({
   t,
   onSaveModel,
   onProbe,
+  onApplyOpenRouter,
+  applyingOpenRouter,
+  openRouterAvailable,
+  checkingOpenRouter,
   onToggleTarget,
   onDirtyChange,
 }: InspectorPanelProps) {
@@ -114,10 +124,29 @@ export function InspectorPanel({
           </section>
 
           <section className="inspector-section">
-            <div className="section-title-row">
-              <h3>{t("capabilities")}</h3>
+            <h3>{t("capabilities")}</h3>
+            <div className="capability-actions">
               <Button
-                variant="ghost"
+                variant="secondary"
+                size="sm"
+                type="button"
+                onClick={onApplyOpenRouter}
+                disabled={busy || !openRouterAvailable}
+                title={
+                  openRouterAvailable
+                    ? t("openRouterApplyHint")
+                    : t("openRouterUnavailable")
+                }
+              >
+                {applyingOpenRouter || checkingOpenRouter ? (
+                  <LoaderCircle className="spin" aria-hidden="true" size={16} />
+                ) : (
+                  <CloudDownload aria-hidden="true" size={16} />
+                )}
+                {t("applyOpenRouter")}
+              </Button>
+              <Button
+                variant="secondary"
                 size="sm"
                 type="button"
                 onClick={onProbe}

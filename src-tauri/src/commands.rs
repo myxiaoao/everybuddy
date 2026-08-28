@@ -20,8 +20,9 @@ use crate::{
     models::{
         AppSettings, BackupRecord, BootstrapData, EvidenceSource, ExecutePublishRequest,
         GatewayInput, GatewayProfile, ManagedModel, ManualModelInput, ModelConfiguration,
-        ModelUpdateInput, PreparePublishRequest, ProbeSummary, PublishPreview, PublishResult,
-        SaveGatewayResult, SaveSettingsInput, TargetKind, TargetModelState, TargetStatus,
+        ModelOrigin, ModelUpdateInput, PreparePublishRequest, ProbeSummary, PublishPreview,
+        PublishResult, SaveGatewayResult, SaveSettingsInput, TargetKind, TargetModelState,
+        TargetStatus,
     },
     publish::PublishCoordinator,
     target::{default_target_paths, target_path, target_statuses, target_write_path},
@@ -288,6 +289,75 @@ pub async fn probe_model(
         request_count: 3,
         notes,
     })
+}
+
+#[tauri::command]
+pub async fn apply_openrouter_model(
+    model_key: String,
+    state: State<'_, AppState>,
+) -> CommandResult<ManagedModel> {
+    let model_snapshot = {
+        let _mutation = lock_app_mutation(state.inner())?;
+        state.store.model(&model_key).map_err(CommandError::from)?
+    };
+    let detail = state
+        .gateway_client
+        .market_model_detail(&model_snapshot.id, &model_snapshot.vendor)
+        .await
+        .map_err(CommandError::from)?;
+    let mut model = model_snapshot.clone();
+    apply_openrouter_detail(&mut model, &detail);
+
+    let _mutation = lock_app_mutation(state.inner())?;
+    let current_model = state.store.model(&model_key).map_err(CommandError::from)?;
+    if current_model != model_snapshot {
+        return Err(crate::error::CoreError::Conflict(
+            "The model changed while OpenRouter information was being loaded; reload and try again"
+                .to_string(),
+        )
+        .into());
+    }
+    state.store.save_model(&model).map_err(CommandError::from)?;
+    Ok(model)
+}
+
+#[tauri::command]
+pub async fn get_openrouter_model_match(
+    model_key: String,
+    state: State<'_, AppState>,
+) -> CommandResult<Option<String>> {
+    let model = {
+        let _mutation = lock_app_mutation(state.inner())?;
+        state.store.model(&model_key).map_err(CommandError::from)?
+    };
+    Ok(state
+        .gateway_client
+        .market_model(&model.id, &model.vendor)
+        .await
+        .map(|matched| matched.id))
+}
+
+fn apply_openrouter_detail(model: &mut ManagedModel, detail: &MarketModel) {
+    let metadata = Value::Null;
+    let (capabilities, evidence) =
+        CapabilityResolver::resolve_with_market(&model.id, &metadata, Some(detail), &[]);
+    let mut configuration =
+        configuration_from_sources(&model.id, &metadata, Some(detail), &capabilities);
+    configuration.endpoint_override = model.configuration.endpoint_override.clone();
+    configuration.use_custom_protocol = model.configuration.use_custom_protocol;
+
+    if !model.metadata.is_object() {
+        model.metadata = json!({});
+    }
+    model.metadata["everybuddyOpenRouterMatch"] = json!({
+        "source": "openrouter",
+        "modelId": detail.id,
+        "supportsTextOutput": detail.supports_chat_configuration(),
+    });
+    model.capabilities = capabilities;
+    model.configuration = configuration;
+    model.evidence = evidence;
+    model.updated_at = Utc::now().to_rfc3339();
 }
 
 fn replace_probe_evidence(
@@ -774,9 +844,9 @@ fn build_manual_model(
     };
     let mut metadata = json!({
         "id": id,
-        "owned_by": vendor,
-        "everybuddySource": "manual"
+        "owned_by": vendor
     });
+    ModelOrigin::Manual.write_to_metadata(&mut metadata);
     let mut identity_override = serde_json::Map::new();
     if !explicit_name.is_empty() {
         identity_override.insert("name".to_string(), json!(resolved_name.clone()));
@@ -813,21 +883,11 @@ fn build_manual_model(
 }
 
 fn preserve_local_models(discovered: &mut Vec<ManagedModel>, existing: &[ManagedModel]) {
-    for model in existing.iter().filter(|model| is_local_model(model)) {
+    for model in existing.iter().filter(|model| model.is_locally_managed()) {
         if !discovered.iter().any(|item| item.key == model.key) {
             discovered.push(model.clone());
         }
     }
-}
-
-fn is_local_model(model: &ManagedModel) -> bool {
-    matches!(
-        model
-            .metadata
-            .get("everybuddySource")
-            .and_then(Value::as_str),
-        Some("manual" | "targetImport")
-    )
 }
 
 #[cfg(test)]
@@ -911,7 +971,7 @@ mod tests {
     fn refresh_preserves_imported_models_missing_from_discovery() {
         let mut imported =
             build_manual_model("gateway-1", "target-model", "Imported", "custom", None);
-        imported.metadata["everybuddySource"] = json!("targetImport");
+        ModelOrigin::Target.write_to_metadata(&mut imported.metadata);
         imported.evidence[0].source = crate::models::EvidenceSource::Imported;
         let mut refreshed = Vec::new();
 
@@ -919,6 +979,70 @@ mod tests {
 
         assert_eq!(refreshed.len(), 1);
         assert_eq!(refreshed[0].key, imported.key);
+    }
+
+    #[test]
+    fn openrouter_detail_replaces_model_facts_and_preserves_local_routing() {
+        let mut model = build_manual_model("gateway-1", "gpt-test", "Private GPT", "openai", None);
+        model.configuration.endpoint_override =
+            Some("https://gateway.example/v1/chat/completions".to_string());
+        model.configuration.use_custom_protocol = true;
+        CapabilityResolver::apply_manual(
+            &mut model,
+            crate::models::CapabilitySet {
+                supports_tool_call: false,
+                supports_images: false,
+                supports_reasoning: false,
+                reasoning_efforts: Vec::new(),
+            },
+        );
+        model.evidence.push(evidence(
+            "images",
+            false,
+            EvidenceSource::Probe,
+            "Old probe",
+            "2026-08-20T00:00:00Z",
+        ));
+        let detail: MarketModel = serde_json::from_value(json!({
+            "id": "openai/gpt-test",
+            "context_length": 128_000,
+            "architecture": {
+                "input_modalities": ["text", "image"],
+                "output_modalities": ["text"]
+            },
+            "top_provider": { "max_completion_tokens": 16_384 },
+            "supported_parameters": ["tools", "reasoning_effort"]
+        }))
+        .unwrap();
+
+        apply_openrouter_detail(&mut model, &detail);
+
+        assert_eq!(model.name, "Private GPT");
+        assert_eq!(model.vendor, "openai");
+        assert_eq!(model.origin(), Some(ModelOrigin::Manual));
+        assert!(model.capabilities.supports_tool_call);
+        assert!(model.capabilities.supports_images);
+        assert!(model.capabilities.supports_reasoning);
+        assert_eq!(model.configuration.max_input_tokens, Some(128_000));
+        assert_eq!(model.configuration.max_output_tokens, Some(16_384));
+        assert_eq!(
+            model.configuration.endpoint_override.as_deref(),
+            Some("https://gateway.example/v1/chat/completions")
+        );
+        assert!(model.configuration.use_custom_protocol);
+        assert_eq!(
+            model.metadata["everybuddyOpenRouterMatch"]["modelId"],
+            "openai/gpt-test"
+        );
+        assert!(model.evidence.iter().any(|item| {
+            item.capability == "toolCall" && item.source == EvidenceSource::OpenRouter
+        }));
+        assert!(!model.evidence.iter().any(|item| {
+            matches!(
+                item.source,
+                EvidenceSource::Manual | EvidenceSource::Probe | EvidenceSource::Imported
+            )
+        }));
     }
 
     #[test]

@@ -289,6 +289,14 @@
   color: var(--color-text-on-subtle);
 }
 
+.gateway-add-button {
+  height: 32px;
+  min-height: 32px;
+  gap: var(--space-1);
+  padding-inline: var(--space-2);
+  font-size: var(--text-caption);
+}
+
 .gateway-list {
   flex: 1;
   min-height: 0;

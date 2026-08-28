@@ -14,6 +14,12 @@ describe("translator", () => {
     expect(createTranslator("zh-CN")("supportedEfforts")).toBe(
       "支持的思考强度",
     );
+    expect(createTranslator("zh-CN")("configuredModelBadge")).toBe("已配置");
+    expect(createTranslator("en")("configuredModelBadge")).toBe("Configured");
+    expect(createTranslator("zh-CN")("applyOpenRouter")).toBe(
+      "从 OpenRouter 设置",
+    );
+    expect(createTranslator("en")("applyOpenRouter")).toBe("Apply OpenRouter");
     expect(createTranslator("en")("unsupported")).toBe("Unsupported");
     expect(createTranslator("zh-CN")("reasoningEffortsUnknown")).toBe(
       "未发现可靠范围，请按 API 文档确认。",

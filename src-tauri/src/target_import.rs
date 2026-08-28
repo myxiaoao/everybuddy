@@ -20,8 +20,8 @@ use crate::{
     gateway_service::{gateway_source_hash, source_identity_key},
     market_catalog,
     models::{
-        CapabilitySet, EvidenceSource, GatewayProfile, ManagedModel, TargetImportIssue,
-        TargetImportReport, TargetKind, TargetModelState,
+        CapabilitySet, EvidenceSource, GatewayProfile, ManagedModel, ModelOrigin,
+        TargetImportIssue, TargetImportReport, TargetKind, TargetModelState,
     },
     secrets::{SecretStore, MISSING_SECRET_MESSAGE},
     store::Store,
@@ -710,7 +710,6 @@ impl ParsedEntry {
             ),
         ];
         if let Some(metadata_object) = metadata.as_object_mut() {
-            metadata_object.insert("everybuddySource".to_string(), json!("targetImport"));
             let identity_override = json!({
                 "name": explicit_name.clone(),
                 "vendor": explicit_vendor.clone(),
@@ -729,6 +728,7 @@ impl ParsedEntry {
                 );
             }
         }
+        ModelOrigin::Target.write_to_metadata(&mut metadata);
         let (mut capabilities, evidence) =
             CapabilityResolver::resolve(&model_id, &metadata, &imported_evidence);
         capabilities.reasoning_efforts = imported_capabilities.reasoning_efforts;

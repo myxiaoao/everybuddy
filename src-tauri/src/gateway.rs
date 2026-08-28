@@ -163,13 +163,8 @@ impl GatewayClient {
                     market_model,
                     &capabilities,
                 );
-                if let Some(source) = existing_model
-                    .and_then(|model| model.metadata.get("everybuddySource"))
-                    .and_then(Value::as_str)
-                {
-                    if let Some(object) = metadata.as_object_mut() {
-                        object.insert("everybuddySource".to_string(), json!(source));
-                    }
+                if let Some(origin) = existing_model.and_then(ManagedModel::origin) {
+                    origin.write_to_metadata(&mut metadata);
                 }
                 if let Some(identity_override) = identity_override {
                     if let Some(object) = metadata.as_object_mut() {
@@ -201,6 +196,14 @@ impl GatewayClient {
             .await?
             .find(model_id, vendor)
             .cloned()
+    }
+
+    pub async fn market_model_detail(
+        &self,
+        model_id: &str,
+        vendor: &str,
+    ) -> CoreResult<MarketModel> {
+        self.market_catalog.model_detail(model_id, vendor).await
     }
 
     pub async fn probe(
@@ -389,14 +392,7 @@ fn resolved_identity(
 }
 
 fn should_preserve_configuration(model: &ManagedModel) -> bool {
-    let local_source = matches!(
-        model
-            .metadata
-            .get("everybuddySource")
-            .and_then(Value::as_str),
-        Some("manual" | "targetImport")
-    );
-    local_source
+    model.is_locally_managed()
         || model
             .evidence
             .iter()
@@ -1105,7 +1101,7 @@ mod tests {
         assert_eq!(preserved, automatic.configuration);
 
         automatic.evidence.clear();
-        automatic.metadata["everybuddySource"] = json!("targetImport");
+        crate::models::ModelOrigin::Target.write_to_metadata(&mut automatic.metadata);
         let imported = discovered_configuration(
             Some(&automatic),
             &automatic.id,

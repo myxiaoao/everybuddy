@@ -282,6 +282,36 @@ fn repeated_import_is_idempotent_and_workbuddy_wins_target_conflicts() {
 }
 
 #[test]
+fn restart_reconciles_models_removed_from_target_configuration() {
+    let directory = tempdir().unwrap();
+    let paths = target_paths(directory.path());
+    let database_path = directory.path().join("everybuddy.db");
+    std::fs::write(
+        paths.get(&TargetKind::Workbuddy).unwrap(),
+        r#"[{"id":"configured-model","url":"https://gateway.example/v1","apiKey":"shared-secret","useCustomProtocol":false}]"#,
+    )
+    .unwrap();
+    let secrets = Arc::new(MemorySecretStore::default());
+
+    {
+        let store = Store::open(&database_path).unwrap();
+        let first = TargetImportService::new(&store, secrets.clone(), &paths)
+            .bootstrap_import()
+            .unwrap();
+        assert_eq!(first.states[0].matched_model_keys.len(), 1);
+    }
+
+    std::fs::write(paths.get(&TargetKind::Workbuddy).unwrap(), "[]").unwrap();
+    let store = Store::open(&database_path).unwrap();
+    let restarted = TargetImportService::new(&store, secrets, &paths)
+        .bootstrap_import()
+        .unwrap();
+
+    assert!(restarted.states[0].matched_model_keys.is_empty());
+    assert_eq!(store.list_models().unwrap().len(), 1);
+}
+
+#[test]
 fn existing_gateway_only_matches_models_without_importing_missing_ones() {
     let directory = tempdir().unwrap();
     let paths = target_paths(directory.path());

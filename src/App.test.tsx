@@ -119,6 +119,46 @@ describe("EveryBuddy workspace", () => {
     );
   });
 
+  it("applies OpenRouter details only to catalog-matched models", async () => {
+    const data = await api.bootstrap();
+    const model = data.models.find((item) => item.id === "gpt-5.6");
+    expect(model).toBeDefined();
+    const apply = vi.spyOn(api, "applyOpenRouterModel").mockResolvedValue({
+      ...model!,
+      updatedAt: "2026-08-28T12:00:00Z",
+    });
+    render(<App />);
+
+    const applyButton = await screen.findByRole("button", {
+      name: "从 OpenRouter 设置",
+    });
+    await waitFor(() => expect(applyButton).toBeEnabled());
+    expect(applyButton).toHaveAttribute(
+      "title",
+      "使用 OpenRouter 模型详情更新能力与自动配置",
+    );
+    fireEvent.click(applyButton);
+
+    await waitFor(() =>
+      expect(apply).toHaveBeenCalledWith("demo-gateway::gpt-5.6"),
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "已使用 OpenRouter 模型信息更新配置",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Qwen3 Coder.*qwen3-coder/ }),
+    );
+    const unavailableButton = screen.getByRole("button", {
+      name: "从 OpenRouter 设置",
+    });
+    await waitFor(() => expect(unavailableButton).toBeDisabled());
+    expect(unavailableButton).toHaveAttribute(
+      "title",
+      "未在 OpenRouter 模型目录中匹配到此模型",
+    );
+  });
+
   it("loads an existing gateway token hidden and toggles its visibility", async () => {
     render(<App />);
 
@@ -169,7 +209,7 @@ describe("EveryBuddy workspace", () => {
     fireEvent.click(screen.getByRole("switch", { name: "推理模式" }));
     fireEvent.click(
       screen.getByRole("button", {
-        name: /Claude Sonnet 4\.5 claude-sonnet-4-5/,
+        name: /Claude Sonnet 4\.5.*claude-sonnet-4-5/,
       }),
     );
 
@@ -181,7 +221,7 @@ describe("EveryBuddy workspace", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: /Claude Sonnet 4\.5 claude-sonnet-4-5/,
+        name: /Claude Sonnet 4\.5.*claude-sonnet-4-5/,
       }),
     );
     dialog = screen.getByRole("dialog", { name: "丢弃未保存的更改" });
@@ -318,6 +358,43 @@ describe("EveryBuddy workspace", () => {
     expect(preparePublish).toHaveBeenCalledWith(
       expect.objectContaining({ modelIds: ["gpt-5.6"] }),
     );
+  });
+
+  it("shows configured badges from startup target matches instead of model provenance", async () => {
+    const data = await api.bootstrap();
+    vi.spyOn(api, "bootstrap").mockResolvedValueOnce({
+      ...data,
+      models: data.models.map((model) =>
+        model.id === "deepseek-r1"
+          ? {
+              ...model,
+              metadata: {
+                ...model.metadata,
+                everybuddySource: "targetImport",
+              },
+            }
+          : model,
+      ),
+      settings: {
+        ...data.settings,
+        selectedTargets: [],
+        targetSelectionInitialized: true,
+      },
+    });
+    render(<App />);
+
+    const configuredModel = await screen.findByRole("button", {
+      name: /Claude Sonnet 4\.5.*claude-sonnet-4-5/,
+    });
+    const removedImportedModel = screen.getByRole("button", {
+      name: /DeepSeek R1.*deepseek-r1/,
+    });
+
+    expect(within(configuredModel).getByText("已配置")).toBeInTheDocument();
+    expect(
+      within(removedImportedModel).queryByText("已配置"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("已导入")).not.toBeInTheDocument();
   });
 
   it("promotes an indeterminate model to checked for all selected targets", async () => {

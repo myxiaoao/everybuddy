@@ -4,6 +4,7 @@ export interface ModelSelection {
   checkedKeys: Set<string>;
   indeterminateKeys: Set<string>;
   presentTargetsByKey: Map<string, TargetKind[]>;
+  configuredKeys: Set<string>;
 }
 
 export function deriveModelSelection(
@@ -21,6 +22,9 @@ export function deriveModelSelection(
   const checkedKeys = new Set<string>();
   const indeterminateKeys = new Set<string>();
   const presentTargetsByKey = new Map<string, TargetKind[]>();
+  const configuredKeys = new Set(
+    targetStates.flatMap((state) => state.matchedModelKeys),
+  );
 
   for (const model of models) {
     const presentTargets = selectedTargets.filter((target) =>
@@ -40,5 +44,10 @@ export function deriveModelSelection(
     }
   }
 
-  return { checkedKeys, indeterminateKeys, presentTargetsByKey };
+  return {
+    checkedKeys,
+    indeterminateKeys,
+    presentTargetsByKey,
+    configuredKeys,
+  };
 }

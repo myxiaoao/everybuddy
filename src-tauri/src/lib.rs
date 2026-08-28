@@ -76,6 +76,8 @@ pub fn run() {
             commands::discover_models,
             commands::add_manual_model,
             commands::probe_model,
+            commands::get_openrouter_model_match,
+            commands::apply_openrouter_model,
             commands::update_model,
             commands::get_target_statuses,
             commands::get_target_model_states,

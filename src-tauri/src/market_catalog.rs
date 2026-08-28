@@ -11,14 +11,17 @@ use atomicwrites::{AtomicFile, OverwriteBehavior};
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use tokio::sync::Mutex;
+use url::Url;
 
 use crate::error::{CoreError, CoreResult};
 
 const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models?output_modalities=all";
+const OPENROUTER_MODEL_URL: &str = "https://openrouter.ai/api/v1/model";
 const MARKET_CATALOG_TIMEOUT: Duration = Duration::from_secs(5);
 const MARKET_CATALOG_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 const MARKET_CATALOG_RETRY_DELAY: Duration = Duration::from_secs(15 * 60);
 const MAX_MARKET_CATALOG_BYTES: usize = 8 * 1024 * 1024;
+const MAX_MARKET_MODEL_BYTES: usize = 1024 * 1024;
 const MAX_MARKET_MODELS: usize = 10_000;
 
 #[derive(Clone)]
@@ -27,6 +30,7 @@ pub struct MarketCatalogClient {
     state: Arc<Mutex<CatalogState>>,
     enabled: bool,
     endpoint: String,
+    model_endpoint: String,
     cache_path: Option<PathBuf>,
 }
 
@@ -120,6 +124,11 @@ struct MarketCatalogResponse {
     data: Vec<MarketModel>,
 }
 
+#[derive(Debug, Deserialize)]
+struct MarketModelResponse {
+    data: MarketModel,
+}
+
 impl MarketCatalogClient {
     pub fn new(client: Client, enabled: bool, cache_path: Option<PathBuf>) -> Self {
         Self {
@@ -127,6 +136,7 @@ impl MarketCatalogClient {
             state: Arc::new(Mutex::new(CatalogState::default())),
             enabled,
             endpoint: OPENROUTER_MODELS_URL.to_string(),
+            model_endpoint: OPENROUTER_MODEL_URL.to_string(),
             cache_path,
         }
     }
@@ -190,7 +200,12 @@ impl MarketCatalogClient {
             )));
         }
 
-        let bytes = read_limited_body(response).await?;
+        let bytes = read_limited_body(
+            response,
+            MAX_MARKET_CATALOG_BYTES,
+            "The OpenRouter models response",
+        )
+        .await?;
         let payload: MarketCatalogResponse = serde_json::from_slice(&bytes).map_err(|_| {
             CoreError::Protocol("The OpenRouter models endpoint returned invalid JSON".into())
         })?;
@@ -198,13 +213,60 @@ impl MarketCatalogClient {
         Ok((snapshot, bytes))
     }
 
+    pub async fn model_detail(&self, model_id: &str, vendor: &str) -> CoreResult<MarketModel> {
+        let snapshot = self.snapshot().await.ok_or_else(|| {
+            CoreError::Network("The OpenRouter model catalog is unavailable".into())
+        })?;
+        let matched = snapshot.find(model_id, vendor).cloned().ok_or_else(|| {
+            CoreError::Validation(
+                "This model is not available in the OpenRouter model catalog".into(),
+            )
+        })?;
+        let url = model_detail_url(&self.model_endpoint, &matched.id)?;
+        let response = self
+            .client
+            .get(url)
+            .timeout(MARKET_CATALOG_TIMEOUT)
+            .send()
+            .await
+            .map_err(|error| CoreError::Network(error.to_string()))?;
+        if response.status() != StatusCode::OK {
+            return Err(CoreError::Protocol(format!(
+                "The OpenRouter model endpoint returned HTTP {}",
+                response.status().as_u16()
+            )));
+        }
+
+        let bytes = read_limited_body(
+            response,
+            MAX_MARKET_MODEL_BYTES,
+            "The OpenRouter model response",
+        )
+        .await?;
+        let payload: MarketModelResponse = serde_json::from_slice(&bytes).map_err(|_| {
+            CoreError::Protocol("The OpenRouter model endpoint returned invalid JSON".into())
+        })?;
+        if payload.data.id.trim().is_empty() {
+            return Err(CoreError::Protocol(
+                "The OpenRouter model endpoint returned an empty model ID".into(),
+            ));
+        }
+        Ok(payload.data)
+    }
+
     #[cfg(test)]
-    fn for_test(client: Client, endpoint: String, cache_path: Option<PathBuf>) -> Self {
+    fn for_test(
+        client: Client,
+        endpoint: String,
+        model_endpoint: String,
+        cache_path: Option<PathBuf>,
+    ) -> Self {
         Self {
             client,
             state: Arc::new(Mutex::new(CatalogState::default())),
             enabled: true,
             endpoint,
+            model_endpoint,
             cache_path,
         }
     }
@@ -599,14 +661,18 @@ fn save_disk_cache(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     )
 }
 
-async fn read_limited_body(mut response: reqwest::Response) -> CoreResult<Vec<u8>> {
+async fn read_limited_body(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+    label: &str,
+) -> CoreResult<Vec<u8>> {
     if response
         .content_length()
-        .is_some_and(|length| length > MAX_MARKET_CATALOG_BYTES as u64)
+        .is_some_and(|length| length > max_bytes as u64)
     {
-        return Err(CoreError::Protocol(
-            "The OpenRouter models response exceeds the 8 MiB limit".into(),
-        ));
+        return Err(CoreError::Protocol(format!(
+            "{label} exceeds the configured size limit"
+        )));
     }
 
     let mut bytes = Vec::new();
@@ -615,14 +681,35 @@ async fn read_limited_body(mut response: reqwest::Response) -> CoreResult<Vec<u8
         .await
         .map_err(|error| CoreError::Network(error.to_string()))?
     {
-        if bytes.len().saturating_add(chunk.len()) > MAX_MARKET_CATALOG_BYTES {
-            return Err(CoreError::Protocol(
-                "The OpenRouter models response exceeds the 8 MiB limit".into(),
-            ));
+        if bytes.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(CoreError::Protocol(format!(
+                "{label} exceeds the configured size limit"
+            )));
         }
         bytes.extend_from_slice(&chunk);
     }
     Ok(bytes)
+}
+
+fn model_detail_url(base: &str, model_id: &str) -> CoreResult<Url> {
+    let (author, slug) = model_id
+        .split_once('/')
+        .ok_or_else(|| CoreError::Protocol("The matched OpenRouter model ID is invalid".into()))?;
+    if author.is_empty() || slug.is_empty() || slug.contains('/') {
+        return Err(CoreError::Protocol(
+            "The matched OpenRouter model ID is invalid".into(),
+        ));
+    }
+    let mut url = Url::parse(base)
+        .map_err(|_| CoreError::Protocol("The OpenRouter model endpoint is invalid".into()))?;
+    let mut segments = url
+        .path_segments_mut()
+        .map_err(|_| CoreError::Protocol("The OpenRouter model endpoint is invalid".into()))?;
+    segments.pop_if_empty();
+    segments.push(author);
+    segments.push(slug);
+    drop(segments);
+    Ok(url)
 }
 
 fn normalize_model_id(value: &str) -> String {
@@ -891,8 +978,12 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let cache_path = directory.path().join("openrouter-models.json");
         let client = Client::builder().build().unwrap();
-        let catalog =
-            MarketCatalogClient::for_test(client.clone(), endpoint, Some(cache_path.clone()));
+        let catalog = MarketCatalogClient::for_test(
+            client.clone(),
+            endpoint,
+            OPENROUTER_MODEL_URL.to_string(),
+            Some(cache_path.clone()),
+        );
 
         tauri::async_runtime::block_on(async {
             assert!(catalog.snapshot().await.is_some());
@@ -904,6 +995,7 @@ mod tests {
         let restored = MarketCatalogClient::for_test(
             client,
             "http://127.0.0.1:1/models".to_string(),
+            OPENROUTER_MODEL_URL.to_string(),
             Some(cache_path),
         );
         let snapshot = tauri::async_runtime::block_on(restored.snapshot()).unwrap();
@@ -921,8 +1013,12 @@ mod tests {
             server_requests.fetch_add(1, Ordering::SeqCst);
             request.respond(tiny_http::Response::empty(503)).unwrap();
         });
-        let catalog =
-            MarketCatalogClient::for_test(Client::builder().build().unwrap(), endpoint, None);
+        let catalog = MarketCatalogClient::for_test(
+            Client::builder().build().unwrap(),
+            endpoint,
+            OPENROUTER_MODEL_URL.to_string(),
+            None,
+        );
 
         tauri::async_runtime::block_on(async {
             assert!(catalog.snapshot().await.is_none());
@@ -930,5 +1026,89 @@ mod tests {
         });
         server_thread.join().unwrap();
         assert_eq!(requests.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn fetches_model_detail_only_after_catalog_match() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let address = server.server_addr();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let server_requests = Arc::clone(&requests);
+        let server_thread = std::thread::spawn(move || {
+            let catalog_request = server.recv().unwrap();
+            server_requests.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(catalog_request.url(), "/models?output_modalities=all");
+            catalog_request
+                .respond(tiny_http::Response::from_string(
+                    serde_json::json!({
+                        "data": [{
+                            "id": "openai/gpt-test:free",
+                            "architecture": {
+                                "input_modalities": ["text"],
+                                "output_modalities": ["text"]
+                            }
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap();
+
+            let detail_request = server.recv().unwrap();
+            server_requests.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(detail_request.url(), "/api/v1/model/openai/gpt-test:free");
+            detail_request
+                .respond(tiny_http::Response::from_string(
+                    serde_json::json!({
+                        "data": {
+                            "id": "openai/gpt-test:free",
+                            "context_length": 128_000,
+                            "architecture": {
+                                "input_modalities": ["text", "image"],
+                                "output_modalities": ["text"]
+                            },
+                            "top_provider": { "max_completion_tokens": 16_384 },
+                            "supported_parameters": ["tools"]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap();
+        });
+        let catalog = MarketCatalogClient::for_test(
+            Client::builder().build().unwrap(),
+            format!("http://{address}/models?output_modalities=all"),
+            format!("http://{address}/api/v1/model"),
+            None,
+        );
+
+        tauri::async_runtime::block_on(async {
+            let detail = catalog
+                .model_detail("gpt-test:free", "openai")
+                .await
+                .unwrap();
+            assert_eq!(detail.id, "openai/gpt-test:free");
+            assert_eq!(detail.max_input_tokens(), Some(128_000));
+            assert_eq!(detail.max_output_tokens(), Some(16_384));
+            assert!(detail.supports_tool_call());
+            assert!(detail.supports_images());
+
+            let error = catalog
+                .model_detail("missing-model", "openai")
+                .await
+                .unwrap_err();
+            assert!(matches!(error, CoreError::Validation(_)));
+        });
+        server_thread.join().unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn builds_model_detail_url_from_author_and_variant_slug() {
+        let url = model_detail_url(OPENROUTER_MODEL_URL, "openai/gpt-4:free").unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            "https://openrouter.ai/api/v1/model/openai/gpt-4:free"
+        );
     }
 }
