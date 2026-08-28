@@ -923,6 +923,11 @@ mod tests {
             model_ids(&fixture.path(TargetKind::Codebuddy)),
             vec!["gpt-5"]
         );
+        for target in [TargetKind::Workbuddy, TargetKind::Codebuddy] {
+            let bytes = fs::read(fixture.path(target)).unwrap();
+            let document = ConfigDocument::parse(&bytes).unwrap();
+            assert_eq!(document.models()[0]["name"], "Gateway · GPT-5");
+        }
         assert_eq!(
             fs::read(fixture.path(TargetKind::Workbuddy)).unwrap(),
             fs::read(fixture.path(TargetKind::Codebuddy)).unwrap()
