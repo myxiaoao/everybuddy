@@ -781,7 +781,10 @@ fn secure_database_files(path: &Path) -> CoreResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use std::fs;
+
+    #[cfg(unix)]
+    use std::path::PathBuf;
 
     use serde_json::json;
     use tempfile::tempdir;
