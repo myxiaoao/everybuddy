@@ -44,6 +44,15 @@ pub fn bootstrap(state: State<'_, AppState>) -> CommandResult<BootstrapData> {
 }
 
 #[tauri::command]
+pub fn get_gateway_token(id: String, state: State<'_, AppState>) -> CommandResult<String> {
+    state
+        .store
+        .gateway_with_token(&id)
+        .map(|(_, token)| token)
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
 pub fn save_gateway(
     input: GatewayInput,
     state: State<'_, AppState>,

@@ -25,7 +25,7 @@ EveryBuddy 是本地桌面应用，不提供远程账户、云同步或团队权
 - **Gateway transport and response**：远程 Gateway 和模型级 Endpoint Override 必须使用 HTTPS，HTTP 仅允许 loopback 地址，HTTP Redirect 不会被自动跟随。`/v1/models` 和 `/chat/completions` 返回不受信任的数据；EveryBuddy 限制响应大小、校验响应结构，在持久化前递归移除 secret-like metadata，并拒绝回显当前 Token 的模型响应。
 - **公开模型目录**：首次模型发现或手动添加模型时可能请求 `GET https://openrouter.ai/api/v1/models?output_modalities=all`，并在本机按 Model ID 匹配能力。目录请求不携带用户 Token、Gateway Base URL、模型选择或 Gateway metadata；成功响应缓存在应用数据目录 6 小时，失败后 15 分钟内不重复请求。
 - **OpenRouter 模型详情**：用户主动选择「从 OpenRouter 设置」且模型已在公开目录中匹配时，EveryBuddy 请求 `GET https://openrouter.ai/api/v1/model/{author}/{slug}`。请求 URL 包含匹配后的 OpenRouter Model ID，但不携带用户 Token、Gateway Base URL 或 Gateway metadata。
-- **本地数据库**：API Token 以明文保存在 EveryBuddy 的 SQLite 数据库中，但不会通过 Tauri IPC 返回前端。能够读取当前用户应用数据目录的本机进程，也能够读取数据库中的 Token。
+- **本地数据库**：API Token 以明文保存在 EveryBuddy 的 SQLite 数据库中。用户打开「编辑 API」时，专用 Tauri IPC 会按 Gateway ID 把当前 Token 返回到该 Dialog，默认以 Password Field 隐藏，关闭 Dialog 后清除前端状态。Token 不进入 bootstrap 数据。能够读取当前用户应用数据目录的本机进程，也能够读取数据库中的 Token。
 - **Target config**：WorkBuddy 和 CodeBuddy 的 `models.json` 是外部可修改文件。EveryBuddy 使用 Fingerprint 检测 Drift，并在每次写入前重新校验；条件回滚不会覆盖发布后发生的外部修改。
 - **本机文件系统**：EveryBuddy 数据库、SQLite WAL/SHM、migration backup、目标文件和目标备份在 Unix 下使用 `0600` 权限，在 Windows 下使用仅允许当前用户访问的受保护 DACL。有效 symlink 会保留并写入真实目标，dangling symlink 会被拒绝。
 - **Updater pipeline**：安装包暂未使用 Apple notarization 或 Windows Authenticode，操作系统会显示未验证开发者警告。Updater 资产使用独立 Ed25519 key 签名；Release workflow 在生成 Draft 后验证 Updater manifest、`.sig`、安装包和 SHA-256 校验和，并为发布资产生成 GitHub provenance attestation。

@@ -13,9 +13,8 @@ const messages = {
     gatewayToken: "Token Key",
     gatewayTokenHint:
       "Token 保存在 EveryBuddy 的本地 SQLite 数据库中，默认隐藏。",
-    gatewayTokenSaved: "已保存凭据",
     gatewayTokenEditHint:
-      "Token 已保存在本地 SQLite 数据库中；留空表示不替换。",
+      "Token 已从本地 SQLite 数据库加载，默认隐藏；修改后保存会替换原 Token。",
     showToken: "显示 Token",
     hideToken: "隐藏 Token",
     saveAndDiscover: "保存并发现模型",
@@ -306,9 +305,8 @@ const messages = {
     gatewayToken: "Token key",
     gatewayTokenHint:
       "The token stays in EveryBuddy's local SQLite database and is hidden by default.",
-    gatewayTokenSaved: "Credential saved",
     gatewayTokenEditHint:
-      "The token is saved in the local SQLite database. Leave this blank to keep it unchanged.",
+      "The token was loaded from the local SQLite database and is hidden by default. Saving a change replaces it.",
     showToken: "Show token",
     hideToken: "Hide token",
     saveAndDiscover: "Save and discover",

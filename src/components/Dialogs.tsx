@@ -197,19 +197,21 @@ export function GatewayDialog({
   open,
   busy,
   gateway,
+  initialToken,
   t,
   errorNotice,
   onClose,
   onSubmit,
 }: CommonDialogProps & {
   gateway: GatewayProfile | null;
+  initialToken: string;
   onSubmit: (input: GatewayInput) => void;
 }) {
   const formId = useId();
   const tokenInputId = useId();
   const [name, setName] = useState(gateway?.name ?? "");
   const [baseUrl, setBaseUrl] = useState(gateway?.apiRoot ?? "");
-  const [token, setToken] = useState("");
+  const [token, setToken] = useState(initialToken);
   const [tokenVisible, setTokenVisible] = useState(false);
 
   function submit(event: FormEvent) {
@@ -218,7 +220,7 @@ export function GatewayDialog({
       id: gateway?.id,
       name,
       baseUrl,
-      ...(token.trim() ? { token: token.trim() } : {}),
+      ...(token.trim() !== initialToken ? { token: token.trim() } : {}),
     });
   }
 
@@ -273,10 +275,10 @@ export function GatewayDialog({
           <div className="secret-input">
             <Input
               id={tokenInputId}
-              required={!gateway}
+              required
               value={token}
               onChange={(event) => setToken(event.currentTarget.value)}
-              placeholder={gateway ? t("gatewayTokenSaved") : "sk-..."}
+              placeholder="sk-..."
               type={tokenVisible ? "text" : "password"}
               autoComplete="off"
               spellCheck="false"

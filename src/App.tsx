@@ -109,6 +109,7 @@ function App() {
   const [editingGateway, setEditingGateway] = useState<GatewayProfile | null>(
     null,
   );
+  const [editingGatewayToken, setEditingGatewayToken] = useState("");
   const [probeDialog, setProbeDialog] = useState(false);
   const [applyingOpenRouter, setApplyingOpenRouter] = useState(false);
   const [openRouterModelMatches, setOpenRouterModelMatches] = useState<
@@ -401,14 +402,24 @@ function App() {
   function openAddGateway() {
     runAfterDiscard(() => {
       setEditingGateway(null);
+      setEditingGatewayToken("");
       setGatewayDialog(true);
     });
   }
 
-  function openEditGateway(gateway: GatewayProfile) {
+  async function openEditGateway(gateway: GatewayProfile) {
+    dispatchWorkflow({ type: "operationStarted" });
     setError(null);
-    setEditingGateway(gateway);
-    setGatewayDialog(true);
+    try {
+      const token = await api.getGatewayToken(gateway.id);
+      setEditingGatewayToken(token);
+      setEditingGateway(gateway);
+      setGatewayDialog(true);
+    } catch (caught) {
+      showError(caught);
+    } finally {
+      dispatchWorkflow({ type: "operationFinished" });
+    }
   }
 
   function requestEditGateway(gateway: GatewayProfile) {
@@ -418,6 +429,7 @@ function App() {
   function closeGatewayDialog() {
     setGatewayDialog(false);
     setEditingGateway(null);
+    setEditingGatewayToken("");
   }
 
   async function saveGateway(input: GatewayInput) {
@@ -998,6 +1010,7 @@ function App() {
             open
             busy={busy}
             gateway={editingGateway}
+            initialToken={editingGatewayToken}
             t={t}
             errorNotice={dialogErrorNotice("gateway")}
             onClose={closeGatewayDialog}

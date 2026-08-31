@@ -68,6 +68,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
+            commands::get_gateway_token,
             commands::save_gateway,
             commands::delete_gateway,
             commands::discover_models,

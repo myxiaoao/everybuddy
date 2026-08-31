@@ -70,7 +70,7 @@ API: Sub2API  >  模型: 已发现 4 个  >  目标: 已选 2 个  [预览并发
 
 ### 添加 API
 
-Dialog 包含名称、API Base URL、Token Key。主要操作是「保存并发现模型」。Token 输入使用 Password Field，说明 Token 保存在 EveryBuddy 的本地 SQLite 数据库中。
+Dialog 包含名称、API Base URL、Token Key。主要操作是「保存并发现模型」。Token 输入使用 Password Field；编辑 API 时按需加载现有 Token，默认隐藏，并保留显示/隐藏切换。关闭 Dialog 后清除前端 Token state。
 
 保存成功后自动选择 Gateway 并执行模型发现。发现本身不显示 Token 消耗警告，因为 `/v1/models` 不调用模型。
 

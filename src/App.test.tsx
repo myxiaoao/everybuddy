@@ -161,7 +161,7 @@ describe("EveryBuddy workspace", () => {
     );
   });
 
-  it("keeps an existing gateway credential write-only while allowing replacement", async () => {
+  it("loads an existing gateway token and keeps the visibility toggle", async () => {
     render(<App />);
 
     await waitFor(() =>
@@ -172,13 +172,13 @@ describe("EveryBuddy workspace", () => {
     const dialog = await screen.findByRole("dialog", { name: "编辑 API" });
     const tokenInput = within(dialog).getByLabelText("Token Key");
     expect(tokenInput).toHaveAttribute("type", "password");
-    expect(tokenInput).toHaveValue("");
-    expect(tokenInput).toHaveAttribute("placeholder", "已保存凭据");
-    expect(dialog).toHaveTextContent("留空表示不替换");
+    expect(tokenInput).toHaveValue("demo-token-primary");
+    expect(dialog).toHaveTextContent("已从本地 SQLite 数据库加载");
 
-    fireEvent.change(tokenInput, { target: { value: "replacement-token" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "显示 Token" }));
     expect(tokenInput).toHaveAttribute("type", "text");
+    expect(tokenInput).toHaveValue("demo-token-primary");
+    fireEvent.change(tokenInput, { target: { value: "replacement-token" } });
     expect(tokenInput).toHaveValue("replacement-token");
     fireEvent.click(within(dialog).getByRole("button", { name: "隐藏 Token" }));
     expect(tokenInput).toHaveAttribute("type", "password");
@@ -810,6 +810,12 @@ describe("EveryBuddy workspace", () => {
     const gatewayDialog = await screen.findByRole("dialog", {
       name: "编辑 API",
     });
-    expect(within(gatewayDialog).getByLabelText("Token Key")).toHaveValue("");
+    expect(within(gatewayDialog).getByLabelText("Token Key")).toHaveValue(
+      "demo-token-primary",
+    );
+    expect(within(gatewayDialog).getByLabelText("Token Key")).toHaveAttribute(
+      "type",
+      "password",
+    );
   });
 });

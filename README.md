@@ -106,7 +106,7 @@ EveryBuddy 当前支持使用 Bearer Token 的 OpenAI-compatible API：
 
 ## Token 安全边界
 
-EveryBuddy 会把明文 Token 写入本地 SQLite 数据库。Token 不会进入 Tauri IPC 返回值、前端持久化状态、模型 metadata、诊断日志或错误对象。WorkBuddy 和 CodeBuddy 的配置协议要求 `models.json` 包含明文 `apiKey`，发布模型时必须把 Token 写入目标配置，目标配置的备份也可能包含相同 Token。
+EveryBuddy 会把明文 Token 写入本地 SQLite 数据库。用户打开「编辑 API」时，应用会按 Gateway ID 读取当前 Token，并通过专用 Tauri IPC 返回到当前 Dialog；Token 默认隐藏，关闭 Dialog 后从前端状态清除。Token 不会进入 bootstrap 数据、模型 metadata、诊断日志或错误对象。WorkBuddy 和 CodeBuddy 的配置协议要求 `models.json` 包含明文 `apiKey`，发布模型时必须把 Token 写入目标配置，目标配置的备份也可能包含相同 Token。
 
 不要把 EveryBuddy 数据库、目标配置、备份或未经检查的诊断日志提交到 Git、上传到公开附件，或存放在不受保护的同步目录。详细边界和日志位置见 [安全策略](SECURITY.md) 与 [故障排查](docs/TROUBLESHOOTING.md)。
 

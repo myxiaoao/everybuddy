@@ -269,8 +269,8 @@ WorkBuddy 与 CodeBuddy 的默认路径不同，但共用 `model_config` 和 `Co
 - Token 以明文保存到 SQLite `gateway_credentials`。能够读取 EveryBuddy 数据库的本机进程，也能够读取 Token；SQLite 加密不属于当前安全边界。
 - 安装级随机 source identity key 保存到 SQLite `app_settings`。`gateway_source_identities` 和 `deleted_gateway_sources` 只保存基于该 key 计算的 HMAC digest，用于来源匹配和 tombstone；这些 digest 不替代 Token 保密措施。数据库已有来源记录但 source identity key 缺失时，操作失败，不自动生成新 key。
 - 应用限制为单实例运行，并使用进程内 mutation lock 串行化 Gateway、Model、Settings、发布和恢复操作。模型发现、OpenRouter 查询和 Probe 在锁外执行网络请求，提交结果前重新加锁并比较 Gateway、Credential 和 Model 快照，拒绝旧响应覆盖新状态。保存 Gateway 时，Profile、Token 和来源摘要在同一 SQLite transaction 中提交；删除 Gateway 时，foreign key cascade 在同一 transaction 中删除 Token。
-- 编辑 API Profile 时，前端只接收「已保存 Token」状态，不读取现有 Token。用户输入替换 Token 后，明文只在当前 Dialog 和 Tauri command 参数中短暂存在；关闭 Dialog 后清除。
-- Token 不进入日志、错误对象、metadata、诊断输出或前端持久化状态。前端 Error、Promise rejection、Updater 和操作错误经统一结构化脱敏后，只按 `warn/error` 写入滚动日志。
+- 编辑 API Profile 时，前端通过 `get_gateway_token` 按 Gateway ID 读取单个现有 Token。明文只在当前 Dialog state 和 Tauri command 参数中短暂存在，默认以 Password Field 隐藏，关闭 Dialog 后清除；Token 不进入 bootstrap 数据。
+- Token 不进入日志、错误对象、metadata、诊断输出或 Dialog 外的前端持久化状态。前端 Error、Promise rejection、Updater 和操作错误经统一结构化脱敏后，只按 `warn/error` 写入滚动日志。
 - OpenRouter 目录请求不携带用户 Token、Gateway Base URL、模型选择或 Gateway metadata；仅在本机以 Model ID 查询已下载的公开目录快照。模型详情请求的 URL 包含匹配后的 OpenRouter Model ID，但同样不携带用户 Token。
 - 启动导入期间，Token 只在 Rust 内存和 SQLite transaction 中用于 Gateway 匹配与写入。`BootstrapData`、`TargetModelState` 和 `TargetImportReport` 不包含 Token。
 - 只有 SQLite 中不存在当前 Gateway Token 且 Target 条目唯一匹配该 Gateway 时，EveryBuddy 才从 Target 修复 Token。
@@ -285,6 +285,7 @@ WorkBuddy 与 CodeBuddy 的默认路径不同，但共用 `model_config` 和 `Co
 | Command                               | 作用                                                                                       |
 | ------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `bootstrap`                           | 执行一次启动导入，返回 Gateway、模型、目标、模型匹配状态、导入报告和设置                   |
+| `get_gateway_token`                   | 用户打开编辑 Dialog 时，按 Gateway ID 读取单个 SQLite Token                                |
 | `save_gateway` / `delete_gateway`     | 管理 Gateway Profile 和 SQLite Token                                                       |
 | `discover_models`                     | 调用 `/v1/models`，更新发现快照并保留未被上游返回的手动模型                                |
 | `add_manual_model`                    | 在指定 Gateway 下创建模型，复用 OpenRouter 缓存解析初始 Capability；未匹配时使用保守默认值 |
