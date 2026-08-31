@@ -23,7 +23,6 @@ describe("ManualModelDialog", () => {
           id: "gateway-1",
           name: "Gateway",
           apiRoot: "https://api.example.com/v1",
-          tokenRef: "credential-1",
           createdAt: "2026-08-27T00:00:00Z",
           updatedAt: "2026-08-27T00:00:00Z",
         }}

@@ -125,7 +125,6 @@ const demoGateway: GatewayProfile = {
   id: "demo-gateway",
   name: "Sub2API",
   apiRoot: "https://api.example.dev/v1",
-  tokenRef: "demo-gateway",
   createdAt: now,
   updatedAt: now,
 };
@@ -134,7 +133,6 @@ const demoRelay: GatewayProfile = {
   id: "demo-relay",
   name: "Local Relay",
   apiRoot: "http://127.0.0.1:8080/v1",
-  tokenRef: "demo-relay",
   createdAt: now,
   updatedAt: now,
 };
@@ -315,7 +313,6 @@ async function demoCall(
         id: input.id ?? `demo-gateway-${demoGateways.length + 1}`,
         name: input.name.trim(),
         apiRoot: input.baseUrl.replace(/\/models\/?$/, "").replace(/\/$/, ""),
-        tokenRef: input.id ?? `demo-gateway-${demoGateways.length + 1}`,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       };

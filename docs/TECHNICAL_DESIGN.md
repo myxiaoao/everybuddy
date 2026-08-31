@@ -25,7 +25,7 @@ EveryBuddy 是一个本地优先的桌面应用。用户添加 OpenAI-compatible
 
 - OpenAI-compatible Bearer Token Gateway。
 - `GET /v1/models` 模型发现。
-- 同时保存多个 Gateway Profile，每个 Gateway 独立维护模型集合和 Token 引用。
+- 同时保存多个 Gateway Profile，每个 Gateway 独立维护模型集合和 Token。
 - 在 `/v1/models` 未返回完整列表时，允许用户在指定 Gateway 下手动添加模型。
 - 用户主动触发的 `/v1/chat/completions` 能力 Probe。
 - OpenRouter 公开模型目录、Gateway metadata、Probe 和人工覆盖。
@@ -60,13 +60,11 @@ React + TypeScript + shadcn/ui
 +-----------------|--------------------|--------------+
                   |                    |
   ~/.workbuddy/models.json   ~/.codebuddy/models.json
-
-Token -> macOS Keychain / Windows Credential Manager
 ```
 
 ### 4.1 前端
 
-- React 负责交互状态和视图，不直接访问文件系统、SQLite 或系统凭据库。
+- React 负责交互状态和视图，不直接访问文件系统或 SQLite。
 - shadcn/ui 提供 Dialog、Button、Input、Checkbox、Switch 和 Tooltip 等基础控件。
 - `src/lib/api.ts` 是唯一 IPC 入口。正式 Tauri 环境调用 Rust command；`?demo=1` 仅用于浏览器视觉验收。
 - Target 状态和模型匹配状态每 5 秒轮询一次，用于识别外部文件修改。轮询不导入凭据，不调用 Gateway API，也不执行 Probe。
@@ -77,12 +75,12 @@ Token -> macOS Keychain / Windows Credential Manager
 | -------------------- | ----------------------------------------------------------------------------- |
 | `gateway.rs`         | URL 规范化、模型发现、主动 Probe、网络错误分类                                |
 | `market_catalog.rs`  | OpenRouter 公开模型目录与模型详情读取、边界校验、精确匹配、磁盘缓存和请求合并 |
-| `gateway_service.rs` | Gateway Profile 与系统凭据的补偿式保存和删除                                  |
+| `gateway_service.rs` | Gateway Profile、Token 和来源摘要的事务化保存与删除                           |
 | `capability.rs`      | Capability Evidence 合并、Gateway metadata 解析和 Vendor 推断                 |
 | `store.rs`           | SQLite connection、transaction 边界和 Repository facade                       |
 | `store/migration.rs` | 版本化 schema migration 和迁移前备份                                          |
 | `store/queries.rs`   | Gateway、模型的 SQL row codec 和 JSON serialization                           |
-| `secrets.rs`         | Keychain / Credential Manager 读写                                            |
+| `secrets.rs`         | SQLite credential 常量和缺失凭据错误边界                                      |
 | `target.rs`          | Target Adapter、schema codec、摘要、权限和原子写入                            |
 | `target_import.rs`   | 启动导入、Target 模型匹配、结构化跳过原因和 Token 隔离                        |
 | `publish.rs`         | 发布预览、冲突确认、备份、补偿回滚和恢复                                      |
@@ -92,13 +90,14 @@ Token -> macOS Keychain / Windows Credential Manager
 
 SQLite 文件位于 Tauri `app_data_dir/everybuddy.db`。
 
-数据库使用 `PRAGMA user_version` 管理 schema，当前 `SCHEMA_VERSION` 为 `3`。已有旧版数据库升级前会通过 SQLite Backup API 保存到同级 `migration-backups/` 目录；v3 会清空旧版已截断且无法可靠还原的 Custom Protocol `endpointOverride`，要求用户重新填写完整请求 URL。高于当前版本的数据库会被拒绝打开，避免旧版本应用写坏新 schema。
+数据库使用 `PRAGMA user_version` 管理 schema，当前 `SCHEMA_VERSION` 为 `4`。已有旧版数据库升级前会通过 SQLite Backup API 保存到同级 `migration-backups/` 目录；v3 会清空旧版已截断且无法可靠还原的 Custom Protocol `endpointOverride`，要求用户重新填写完整请求 URL。v4 新增 `gateway_credentials`，并把 source identity key 移入 SQLite。旧版应用在 SQLite 外保存的 Token 不会直接迁移；启动导入会优先从现有 `models.json` 恢复，无法恢复时需要重新填写。旧 HMAC 来源摘要依赖已移除的外部 identity key，因此 v4 migration 会清空旧来源摘要和 tombstone，再按当前 Target 配置重建。SQLite 主文件、WAL/SHM 和 migration backup 会应用私有文件权限。高于当前版本的数据库会被拒绝打开，避免旧版本应用写坏新 schema。
 
-- `gateway_profiles`：保存名称、规范化 `api_root`、`token_ref` 和时间戳，不保存 Token。
+- `gateway_profiles`：保存名称、规范化 `api_root` 和时间戳。v4 仍保留未使用的 `token_ref` 物理列，以兼容旧数据库结构；该字段不进入 Rust model 或 Tauri IPC。
+- `gateway_credentials`：按 `gateway_id` 保存明文 Token 和更新时间，与 Gateway Profile 通过 foreign key 关联。
 - `models`：主键为 `{gateway_id}::{upstream_model_id}`。相同上游模型 ID 在不同 Gateway 中保持独立。`capabilities_json` 保存能力证据结果，`configuration_json` 保存完整模型调用参数。手动模型在 `metadata.everybuddySource` 中标记为 `manual`，Target 导入模型标记为 `targetImport`。
 - `target_states`：记录两个目标的路径、最后读取摘要、最后发布摘要和 schema。
 - `backups`：记录来源、SHA-256 Fingerprint 和创建时间，每个目标保留最近 10 份。
-- `app_settings`：保存语言、主题、最近目标选择和自定义路径。
+- `app_settings`：保存语言、主题、最近目标选择、自定义路径和内部 source identity key。
 - `gateway_source_identities`：保存 Gateway 来源的 keyed digest，不保存 API Token。一个 Gateway 可以登记 Base URL 和模型级 `endpointOverride` 对应的多个来源。
 - `deleted_gateway_sources`：保存已删除或轮换来源的 tombstone，避免启动导入从 Target 恢复旧 Gateway。
 - `stale_gateway_models`：来源变化后临时隔离旧模型。刷新成功前，旧模型不参与 UI、Target 匹配、编辑和发布。
@@ -237,11 +236,11 @@ WorkBuddy 与 CodeBuddy 的默认路径不同，但共用 `model_config` 和 `Co
 1. 按 WorkBuddy、CodeBuddy 的固定顺序读取数组或 wrapped schema。
 2. 只接受 `useCustomProtocol: false`、符合远程 HTTPS 或本机 loopback HTTP 规则的 URL、非空 Model ID 和非空 `apiKey` 的条目。
 3. 按规范化 `url + apiKey` 聚合 Gateway。相同 Model ID 只有在有效 URL、Token 和 `useCustomProtocol` 均匹配时才关联到本地模型。
-4. 唯一同 URL Gateway 缺少凭据时，EveryBuddy 可以从 Target 修复凭据。存在多个候选或系统凭据库不可用时，EveryBuddy 跳过条目并报告原因。
+4. 唯一同 URL Gateway 缺少 SQLite Token 时，EveryBuddy 可以从 Target 修复 Token。存在多个候选时，EveryBuddy 跳过条目并报告原因。
 5. API 来源不存在时，EveryBuddy 按手动添加的数据边界创建 Gateway，并导入该新 Gateway 在 Target 中的模型。API 来源已存在时，EveryBuddy 不补写或覆盖本地模型，只用 Model ID、有效 URL 和 Token 恢复匹配状态。
 6. 两个 Target 的同一模型参数不一致时，首次导入保留 WorkBuddy 参数，并报告 CodeBuddy 差异。
-7. 启动导入在 SQLite `BEGIN IMMEDIATE` transaction 中重新读取 Gateway 和模型快照。应用使用 single-instance plugin 限制为单实例运行，transaction 仍用于防止重复调用并发写入。
-8. SQLite 批量写入失败时，EveryBuddy 删除本次新写入或修复的凭据；凭据清理失败会作为独立错误上报，不静默忽略。
+7. 启动导入在 SQLite `BEGIN IMMEDIATE` transaction 中重新读取 Gateway、Token、模型、tombstone 和 source identity key。应用使用 single-instance plugin 限制为单实例运行，transaction 仍用于防止重复调用并发写入。
+8. 新建 Gateway、恢复 Token、登记来源摘要和导入模型在同一 transaction 中提交。任一写入失败时，SQLite 自动回滚本次全部修改。
 
 只有新建 API 来源时才导入 Target 模型，其字段覆盖名称、Vendor、Capability、Reasoning 和 Model Configuration。导入 metadata 在写入 SQLite 前递归移除 secret-like 字段。
 
@@ -249,9 +248,9 @@ WorkBuddy 与 CodeBuddy 的默认路径不同，但共用 `model_config` 和 `Co
 
 ## 9. 发布事务
 
-1. Preview 读取目标配置，记录配置路径、symlink 解析后的实际写入路径、Fingerprint、API Profile revision、Keychain credential revision 和模型 revision，并计算新增、更新、不变和模型 ID 冲突。
+1. Preview 读取目标配置，记录配置路径、symlink 解析后的实际写入路径、Fingerprint、API Profile revision、credential revision 和模型 revision，并计算新增、更新、不变和模型 ID 冲突。Credential revision 是根据 SQLite Token、API Base URL 和 source identity key 计算的 keyed digest，不包含明文 Token。
 2. 用户确认目标、明文 Token 提示和冲突替换。
-3. Execute 重新读取 Gateway、Keychain Token、模型和 Target 设置，并比较 Preview 中的全部 revision、路径和 Fingerprint。
+3. Execute 重新读取 SQLite 中的 Gateway、Token、模型和 Target 设置，并比较 Preview 中的全部 revision、路径和 Fingerprint。
 4. API、Token、模型或路径不一致时返回 `CONFLICT_ERROR`；文件内容不一致时返回 `DRIFT_ERROR`。两种错误都不写文件。
 5. 对所有已存在的目标分别创建备份。
 6. 每个目标写入前再次读取文件；内容与 Execute 阶段快照不一致时返回 `DRIFT_ERROR`，保留外部修改。
@@ -267,17 +266,16 @@ WorkBuddy 与 CodeBuddy 的默认路径不同，但共用 `model_config` 和 `Co
 
 ## 10. 安全模型
 
-- Token 保存到 macOS Keychain 或 Windows Credential Manager，SQLite 只保存 `token_ref`。
-- 安装级随机 source identity key 保存在系统凭据库中。SQLite 只保存基于该 key 计算的 HMAC digest，用于来源匹配和 tombstone；不能从数据库副本直接验证候选 Token。数据库已有来源记录但 source identity key 缺失时，操作失败，不自动生成新 key。
-- Tauri identifier 固定为 `com.everybuddy.desktop`。Gateway 凭据使用 `com.everybuddy.desktop.gateway` service；读取不到凭据时会检查旧 service `com.everybuddy.app.gateway`，把命中的凭据迁移到新 service，并删除旧项。删除 Gateway 时同时清理 current 和 legacy service。
-- 应用限制为单实例运行，并使用进程内 mutation lock 串行化 Gateway、凭据、Model、Settings、发布和恢复操作。模型发现、OpenRouter 查询和 Probe 在锁外执行网络请求，提交结果前重新加锁并比较 Gateway、Credential 和 Model 快照，拒绝旧响应覆盖新状态。保存 Gateway 时先写凭据再写 SQLite。SQLite 失败时，已有 Gateway 恢复旧 Token，新 Gateway 删除新 Token。删除 Gateway 时 SQLite 失败会恢复已删除的 Token；系统凭据库不可用时，操作在修改 SQLite 前终止。
-- 编辑 API Profile 时按需从系统凭据库读取 Token，仅保留在当前 Dialog 的内存状态中；默认隐藏，关闭 Dialog 后清除。
+- Token 以明文保存到 SQLite `gateway_credentials`。能够读取 EveryBuddy 数据库的本机进程，也能够读取 Token；SQLite 加密不属于当前安全边界。
+- 安装级随机 source identity key 保存到 SQLite `app_settings`。`gateway_source_identities` 和 `deleted_gateway_sources` 只保存基于该 key 计算的 HMAC digest，用于来源匹配和 tombstone；这些 digest 不替代 Token 保密措施。数据库已有来源记录但 source identity key 缺失时，操作失败，不自动生成新 key。
+- 应用限制为单实例运行，并使用进程内 mutation lock 串行化 Gateway、Model、Settings、发布和恢复操作。模型发现、OpenRouter 查询和 Probe 在锁外执行网络请求，提交结果前重新加锁并比较 Gateway、Credential 和 Model 快照，拒绝旧响应覆盖新状态。保存 Gateway 时，Profile、Token 和来源摘要在同一 SQLite transaction 中提交；删除 Gateway 时，foreign key cascade 在同一 transaction 中删除 Token。
+- 编辑 API Profile 时，前端只接收「已保存 Token」状态，不读取现有 Token。用户输入替换 Token 后，明文只在当前 Dialog 和 Tauri command 参数中短暂存在；关闭 Dialog 后清除。
 - Token 不进入日志、错误对象、metadata、诊断输出或前端持久化状态。前端 Error、Promise rejection、Updater 和操作错误经统一结构化脱敏后，只按 `warn/error` 写入滚动日志。
 - OpenRouter 目录请求不携带用户 Token、Gateway Base URL、模型选择或 Gateway metadata；仅在本机以 Model ID 查询已下载的公开目录快照。模型详情请求的 URL 包含匹配后的 OpenRouter Model ID，但同样不携带用户 Token。
-- 启动导入期间，Token 只在 Rust 内存中用于 Gateway 匹配和凭据写入。`BootstrapData`、`TargetModelState` 和 `TargetImportReport` 不包含 Token。
-- 只有系统凭据库明确报告凭据缺失时，EveryBuddy 才从 Target 修复 Token。凭据库不可用时停止该条目导入。
-- WorkBuddy 和 CodeBuddy 要求 Token 出现在 `models.json`，发布前必须展示该限制。
-- Unix 配置和备份权限设置为 `0600`；Windows 写入受保护 DACL，仅授予当前用户访问权限。
+- 启动导入期间，Token 只在 Rust 内存和 SQLite transaction 中用于 Gateway 匹配与写入。`BootstrapData`、`TargetModelState` 和 `TargetImportReport` 不包含 Token。
+- 只有 SQLite 中不存在当前 Gateway Token 且 Target 条目唯一匹配该 Gateway 时，EveryBuddy 才从 Target 修复 Token。
+- WorkBuddy 和 CodeBuddy 要求 Token 以明文 `apiKey` 出现在 `models.json`，发布前必须展示该限制。
+- SQLite 主文件、WAL/SHM、migration backup、Target 配置和目标备份在 Unix 下使用 `0600`；Windows 使用受保护 DACL，仅授予当前用户访问权限。
 - 配置写入使用同目录临时文件和原子替换。
 - CSP 仅允许应用自身资源、Tauri IPC 和本地 Asset Protocol。
 - 删除 Gateway 不会删除已发布到目标产品的模型配置。删除和 Token 轮换会保存 Base URL 及已发布 `endpointOverride` 的来源 tombstone，避免旧配置在下次启动时恢复为新 Gateway。
@@ -287,7 +285,7 @@ WorkBuddy 与 CodeBuddy 的默认路径不同，但共用 `model_config` 和 `Co
 | Command                               | 作用                                                                                       |
 | ------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `bootstrap`                           | 执行一次启动导入，返回 Gateway、模型、目标、模型匹配状态、导入报告和设置                   |
-| `save_gateway` / `delete_gateway`     | 管理 Gateway Profile 和系统凭据                                                            |
+| `save_gateway` / `delete_gateway`     | 管理 Gateway Profile 和 SQLite Token                                                       |
 | `discover_models`                     | 调用 `/v1/models`，更新发现快照并保留未被上游返回的手动模型                                |
 | `add_manual_model`                    | 在指定 Gateway 下创建模型，复用 OpenRouter 缓存解析初始 Capability；未匹配时使用保守默认值 |
 | `get_openrouter_model_match`          | 查询当前模型是否存在于 OpenRouter 目录，并返回匹配后的 Model ID                            |
@@ -320,9 +318,9 @@ pnpm tauri build
 
 Fake Gateway 测试实际验证 HTTP Path、Bearer Header 和模型响应解析。Frontend 检查在 Linux 上执行一次；Rust 和 Tauri Bundle 在 macOS、Windows 上分别验证。稳定的 `CI Gate` 聚合所有适用 Job，作为 Branch Ruleset 的 Required Status Check。
 
-模型库测试覆盖多个 Gateway 保存相同上游 Model ID、手动和导入模型在 Refresh 后保留、来源变化后的 stale 隔离与恢复、刷新期间本地编辑的并发冲突，以及上游后来返回同一 ID 时不生成重复记录。Capability 测试覆盖 Gateway metadata 对 OpenRouter 的字段优先级、基础 ID、Delivery Variant、Alias 与 Canonical slug 的字段级 fallback、Pro 型号隔离、动态 Provider namespace、Reasoning Effort alias、`none` 转换、`mandatory`、默认 Effort、Temperature、Token 上限和非 text-output 硬约束；OpenRouter Client 测试覆盖 catalog gate、模型详情接口、Variant URL、进程内复用和跨启动磁盘缓存，并验证应用详情时保留本地路由配置。Gateway 测试覆盖远程 HTTP 拒绝、本机 HTTP、4 MiB 响应上限、10,000 模型上限、重复 Model ID、短 Token 回显隔离和 Vision challenge 响应校验。Target Import 测试覆盖数组和 wrapped schema、重复启动幂等、序列化导入、WorkBuddy 冲突优先级、Custom Protocol 精确匹配、同 URL 不同 Token、缺失或歧义凭据、来源轮换和删除 tombstone、损坏 JSON、非法参数、凭据清理失败和 Token 隔离。
+模型库测试覆盖多个 Gateway 保存相同上游 Model ID、手动和导入模型在 Refresh 后保留、来源变化后的 stale 隔离与恢复、刷新期间本地编辑的并发冲突，以及上游后来返回同一 ID 时不生成重复记录。Store 测试覆盖 v3 到 v4 migration、SQLite Token 表、source identity key、旧来源摘要清理，以及导入失败时 Profile、Token 和来源摘要的 transaction rollback。Capability 测试覆盖 Gateway metadata 对 OpenRouter 的字段优先级、基础 ID、Delivery Variant、Alias 与 Canonical slug 的字段级 fallback、Pro 型号隔离、动态 Provider namespace、Reasoning Effort alias、`none` 转换、`mandatory`、默认 Effort、Temperature、Token 上限和非 text-output 硬约束；OpenRouter Client 测试覆盖 catalog gate、模型详情接口、Variant URL、进程内复用和跨启动磁盘缓存，并验证应用详情时保留本地路由配置。Gateway 测试覆盖远程 HTTP 拒绝、本机 HTTP、4 MiB 响应上限、10,000 模型上限、重复 Model ID、短 Token 回显隔离和 Vision challenge 响应校验。Target Import 测试覆盖数组和 wrapped schema、重复启动幂等、序列化导入、WorkBuddy 冲突优先级、Custom Protocol 精确匹配、同 URL 不同 Token、SQLite Token 恢复、歧义凭据、来源轮换和删除 tombstone、损坏 JSON、非法参数及 Token 隔离。
 
-发布测试覆盖 WorkBuddy 单目标、CodeBuddy 单目标、双目标成功、第二目标失败补偿、首次创建文件的失败清理、API 与 Keychain revision、路径和 symlink 变化、写前 Drift、外部修改后的条件回滚、备份恢复、恢复状态保存失败回滚、每个目标保留 10 份备份，以及 SQLite 状态 transaction 失败后的文件回滚。Target 测试覆盖 8 MiB/10,000 条限制和重复 Model ID。Gateway Service 测试覆盖保存、删除和补偿失败，错误文本不得包含 Token。
+发布测试覆盖 WorkBuddy 单目标、CodeBuddy 单目标、双目标成功、第二目标失败补偿、首次创建文件的失败清理、API 与 credential revision、路径和 symlink 变化、写前 Drift、外部修改后的条件回滚、备份恢复、恢复状态保存失败回滚、每个目标保留 10 份备份，以及 SQLite 状态 transaction 失败后的文件回滚。Target 测试覆盖 8 MiB/10,000 条限制和重复 Model ID。Gateway Service 测试覆盖保存、删除、Token 复用、缺失 Token 和来源变化，错误文本不得包含 Token。
 
 CI 固定使用 pnpm `11.22.0`、Node.js 22 和 Rust `1.91.1`。Release workflow 只接受属于 `main` 的版本 Tag，并在 `release` Environment 审批后构建 macOS Universal 和 Windows x64 安装包。当前稳定版本为 `0.1.1`；workflow 创建 Draft（非 Prerelease），并验证 Tauri Updater Artifact、`latest.json`、`.sig`、安装包和 `SHA256SUMS.txt`。安装包暂未使用 Apple notarization 或 Windows Authenticode，Release 和 README 必须明确显示未验证开发者警告。
 

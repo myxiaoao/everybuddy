@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard};
 
 use chrono::Utc;
 use serde_json::{json, Value};
@@ -15,13 +15,11 @@ use crate::{
         EvidenceSource, GatewayProfile, ManagedModel, ManualModelInput, ModelConfiguration,
         ModelOrigin, ModelUpdateInput, ProbeSummary,
     },
-    secrets::SecretStore,
     store::Store,
 };
 
 pub struct ModelLifecycle<'a> {
     store: &'a Store,
-    secrets: &'a Arc<dyn SecretStore>,
     gateway_client: &'a GatewayClient,
     app_mutation: &'a Mutex<()>,
 }
@@ -398,13 +396,11 @@ pub(crate) fn preserve_local_models(discovered: &mut Vec<ManagedModel>, existing
 impl<'a> ModelLifecycle<'a> {
     pub fn new(
         store: &'a Store,
-        secrets: &'a Arc<dyn SecretStore>,
         gateway_client: &'a GatewayClient,
         app_mutation: &'a Mutex<()>,
     ) -> Self {
         Self {
             store,
-            secrets,
             gateway_client,
             app_mutation,
         }
@@ -413,8 +409,7 @@ impl<'a> ModelLifecycle<'a> {
     pub async fn discover(&self, gateway_id: String) -> CoreResult<Vec<ManagedModel>> {
         let (profile, token, existing) = {
             let _mutation = self.lock_mutation()?;
-            let profile = self.store.gateway(&gateway_id)?;
-            let token = self.secrets.get(&profile.token_ref)?;
+            let (profile, token) = self.store.gateway_with_token(&gateway_id)?;
             let existing = self.store.models_for_gateway_including_stale(&gateway_id)?;
             (profile, token, existing)
         };
@@ -426,8 +421,7 @@ impl<'a> ModelLifecycle<'a> {
         models.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
 
         let _mutation = self.lock_mutation()?;
-        let current_profile = self.store.gateway(&gateway_id)?;
-        let current_token = self.secrets.get(&current_profile.token_ref)?;
+        let (current_profile, current_token) = self.store.gateway_with_token(&gateway_id)?;
         ensure_gateway_snapshot_unchanged(&profile, &token, &current_profile, &current_token)?;
         self.store
             .replace_gateway_models_if_unchanged(&profile, &existing, &models)?;
@@ -477,8 +471,7 @@ impl<'a> ModelLifecycle<'a> {
         let (mut model, profile, token) = {
             let _mutation = self.lock_mutation()?;
             let model = self.store.model(&model_key)?;
-            let profile = self.store.gateway(&model.gateway_id)?;
-            let token = self.secrets.get(&profile.token_ref)?;
+            let (profile, token) = self.store.gateway_with_token(&model.gateway_id)?;
             (model, profile, token)
         };
         let model_snapshot = model.clone();
@@ -491,8 +484,7 @@ impl<'a> ModelLifecycle<'a> {
         model.updated_at = Utc::now().to_rfc3339();
 
         let _mutation = self.lock_mutation()?;
-        let current_profile = self.store.gateway(&model.gateway_id)?;
-        let current_token = self.secrets.get(&current_profile.token_ref)?;
+        let (current_profile, current_token) = self.store.gateway_with_token(&model.gateway_id)?;
         let current_model = self.store.model(&model_key)?;
         ensure_gateway_snapshot_unchanged(&profile, &token, &current_profile, &current_token)?;
         if current_model != model_snapshot {

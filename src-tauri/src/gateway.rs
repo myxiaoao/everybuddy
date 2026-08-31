@@ -805,7 +805,6 @@ mod tests {
             id: "remote".to_string(),
             name: "Remote".to_string(),
             api_root: "https://unused.example/v1".to_string(),
-            token_ref: "remote".to_string(),
             created_at: "2026-08-20T00:00:00Z".to_string(),
             updated_at: "2026-08-20T00:00:00Z".to_string(),
         };
@@ -845,7 +844,6 @@ mod tests {
             id: "remote".to_string(),
             name: "Remote".to_string(),
             api_root: "https://unused.example/v1".to_string(),
-            token_ref: "remote".to_string(),
             created_at: "2026-08-20T00:00:00Z".to_string(),
             updated_at: "2026-08-20T00:00:00Z".to_string(),
         };
@@ -904,7 +902,6 @@ mod tests {
             id: "fake".to_string(),
             name: "Fake gateway".to_string(),
             api_root: format!("http://{address}/v1"),
-            token_ref: "fake".to_string(),
             created_at: "2026-08-20T00:00:00Z".to_string(),
             updated_at: "2026-08-20T00:00:00Z".to_string(),
         };
@@ -941,7 +938,6 @@ mod tests {
             id: "fake".to_string(),
             name: "Fake gateway".to_string(),
             api_root: format!("http://{address}/v1"),
-            token_ref: "fake".to_string(),
             created_at: "2026-08-20T00:00:00Z".to_string(),
             updated_at: "2026-08-20T00:00:00Z".to_string(),
         };
@@ -1147,7 +1143,6 @@ mod tests {
             id: "fake".to_string(),
             name: "Fake gateway".to_string(),
             api_root: format!("http://{address}/v1"),
-            token_ref: "fake".to_string(),
             created_at: "2026-08-20T00:00:00Z".to_string(),
             updated_at: "2026-08-20T00:00:00Z".to_string(),
         };
@@ -1180,7 +1175,6 @@ mod tests {
             id: "redirect".to_string(),
             name: "Redirect".to_string(),
             api_root: format!("http://{address}/v1"),
-            token_ref: "redirect".to_string(),
             created_at: Utc::now().to_rfc3339(),
             updated_at: Utc::now().to_rfc3339(),
         };

@@ -11,7 +11,6 @@ export interface GatewayProfile {
   id: string;
   name: string;
   apiRoot: string;
-  tokenRef: string;
   createdAt: string;
   updatedAt: string;
 }

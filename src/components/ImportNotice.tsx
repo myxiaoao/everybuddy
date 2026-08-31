@@ -110,8 +110,6 @@ function importIssueLabel(
     customProtocol: "importIssueCustomProtocol",
     ambiguousModel: "importIssueAmbiguousModel",
     ambiguousGateway: "importIssueAmbiguousGateway",
-    credentialImportFailed: "importIssueCredentialImportFailed",
-    credentialUnavailable: "importIssueCredentialUnavailable",
     targetConflict: "importIssueTargetConflict",
     modelConflict: "importIssueModelConflict",
   } as const;

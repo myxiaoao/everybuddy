@@ -400,8 +400,6 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> CoreResult<()> {
             |file| -> std::io::Result<()> {
                 file.write_all(bytes)?;
                 file.sync_all()?;
-                #[cfg(windows)]
-                secure_windows_file(file)?;
                 Ok(())
             },
             options,
@@ -409,6 +407,10 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> CoreResult<()> {
         .map_err(|error| {
             CoreError::Target(format!("Could not write {}: {error}", path.display()))
         })?;
+    #[cfg(windows)]
+    crate::file_permissions::secure_path(&write_path).map_err(|error| {
+        CoreError::Target(format!("Could not secure {}: {error}", path.display()))
+    })?;
     Ok(())
 }
 
@@ -459,93 +461,6 @@ fn resolve_missing_path(path: &Path) -> CoreResult<PathBuf> {
         resolved.push(component);
     }
     Ok(resolved)
-}
-
-#[cfg(windows)]
-fn secure_windows_file(file: &fs::File) -> std::io::Result<()> {
-    use std::{ffi::c_void, mem::size_of, os::windows::io::AsRawHandle, ptr};
-
-    use windows_sys::Win32::{
-        Foundation::{CloseHandle, GENERIC_ALL, HANDLE},
-        Security::{
-            AddAccessAllowedAce,
-            Authorization::{SetSecurityInfo, SE_FILE_OBJECT},
-            GetLengthSid, GetTokenInformation, InitializeAcl, TokenUser, ACCESS_ALLOWED_ACE, ACL,
-            ACL_REVISION, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
-            TOKEN_QUERY, TOKEN_USER,
-        },
-        System::Threading::{GetCurrentProcess, OpenProcessToken},
-    };
-
-    let mut token: HANDLE = ptr::null_mut();
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
-        return Err(windows_permission_error(None));
-    }
-
-    let result = (|| {
-        let mut token_info_size = 0;
-        unsafe { GetTokenInformation(token, TokenUser, ptr::null_mut(), 0, &mut token_info_size) };
-        if token_info_size == 0 {
-            return Err(windows_permission_error(None));
-        }
-
-        // usize storage keeps the buffer aligned for TOKEN_USER.
-        let mut token_info = vec![0usize; (token_info_size as usize).div_ceil(size_of::<usize>())];
-        if unsafe {
-            GetTokenInformation(
-                token,
-                TokenUser,
-                token_info.as_mut_ptr().cast::<c_void>(),
-                token_info_size,
-                &mut token_info_size,
-            )
-        } == 0
-        {
-            return Err(windows_permission_error(None));
-        }
-
-        let user = unsafe { &*token_info.as_ptr().cast::<TOKEN_USER>() };
-        let sid_length = unsafe { GetLengthSid(user.User.Sid) } as usize;
-        if sid_length == 0 {
-            return Err(windows_permission_error(None));
-        }
-
-        let acl_size =
-            size_of::<ACL>() + size_of::<ACCESS_ALLOWED_ACE>() + sid_length - size_of::<u32>();
-        let mut acl_storage = vec![0u32; acl_size.div_ceil(size_of::<u32>())];
-        let acl = acl_storage.as_mut_ptr().cast::<ACL>();
-        if unsafe { InitializeAcl(acl, acl_size as u32, ACL_REVISION) } == 0
-            || unsafe { AddAccessAllowedAce(acl, ACL_REVISION, GENERIC_ALL, user.User.Sid) } == 0
-        {
-            return Err(windows_permission_error(None));
-        }
-
-        let status = unsafe {
-            SetSecurityInfo(
-                file.as_raw_handle().cast(),
-                SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                ptr::null_mut(),
-                ptr::null_mut(),
-                acl,
-                ptr::null_mut(),
-            )
-        };
-        if status != 0 {
-            return Err(windows_permission_error(Some(status)));
-        }
-        Ok(())
-    })();
-
-    unsafe { CloseHandle(token) };
-    result
-}
-
-#[cfg(windows)]
-fn windows_permission_error(status: Option<u32>) -> std::io::Error {
-    status
-        .map(|code| std::io::Error::from_raw_os_error(code as i32))
-        .unwrap_or_else(std::io::Error::last_os_error)
 }
 
 #[cfg(test)]
@@ -777,7 +692,6 @@ mod tests {
             id: "gateway".to_string(),
             name: "Gateway".to_string(),
             api_root: "https://api.example.com/v1".to_string(),
-            token_ref: "gateway".to_string(),
             created_at: "2026-08-20T00:00:00Z".to_string(),
             updated_at: "2026-08-20T00:00:00Z".to_string(),
         };

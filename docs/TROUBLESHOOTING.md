@@ -9,7 +9,7 @@
 
 ## Token 无法读取
 
-EveryBuddy 把 Token 保存到 macOS Keychain 或 Windows Credential Manager。系统凭据缺失时，编辑对应 API 并重新保存 Token。不要把 Token 写入 Issue、截图或日志附件。
+EveryBuddy 把 Token 保存在本地 SQLite 数据库中。数据库缺少 Token 时，应用会在启动导入期间尝试从 WorkBuddy 或 CodeBuddy 的 `models.json` 恢复；如果目标配置中也没有对应来源，编辑该 API 并重新保存 Token。不要把 Token、EveryBuddy 数据库或完整 `models.json` 写入 Issue、截图或日志附件。
 
 ## 无法从 OpenRouter 设置
 

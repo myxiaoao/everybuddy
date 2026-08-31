@@ -2,7 +2,6 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use chrono::Utc;
@@ -13,13 +12,12 @@ use crate::{
     capability::{has_unverified_market_match, supports_chat_configuration},
     conditional_write::{replace_exact, rollback_exact},
     error::{CoreError, CoreResult},
-    gateway_service::{gateway_source_hash, source_identity_key},
+    gateway_service::gateway_source_hash,
     models::{
         BackupRecord, ExecutePublishRequest, GatewayProfile, ManagedModel, ModelConflict,
         ModelRevision, PreparePublishRequest, PublishPreview, PublishResult, TargetKind,
         TargetPreview, TargetPublishResult,
     },
-    secrets::SecretStore,
     store::{Store, TargetStateUpdate},
     target::{
         atomic_write, fingerprint, read_target_file, target_path, target_write_path, ConfigDocument,
@@ -33,7 +31,6 @@ const MAX_PUBLISH_IDENTIFIER_BYTES: usize = 512;
 
 pub struct PublishCoordinator<'a> {
     pub store: &'a Store,
-    pub secrets: Arc<dyn SecretStore>,
     pub backup_root: &'a Path,
 }
 
@@ -159,7 +156,7 @@ impl PublishCoordinator<'_> {
             });
         }
 
-        let current_token = self.secrets.get(&snapshot.gateway.token_ref)?;
+        let current_token = self.store.gateway_token(&snapshot.gateway.id)?;
         let current_credential_revision = gateway_source_hash(
             &snapshot.identity_key,
             &snapshot.gateway.api_root,
@@ -418,15 +415,11 @@ impl PublishSnapshot {
         gateway_id: &str,
         model_ids: &[String],
     ) -> CoreResult<Self> {
-        let gateway = coordinator.store.gateway(gateway_id)?;
+        let (gateway, token) = coordinator.store.gateway_with_token(gateway_id)?;
         let selected_models = coordinator.store.selected_models(gateway_id, model_ids)?;
         let managed_models = coordinator.store.models_for_gateway(gateway_id)?;
         validate_model_configurations(&selected_models)?;
-        let token = coordinator.secrets.get(&gateway.token_ref)?;
-        let identity_key = source_identity_key(
-            coordinator.secrets.as_ref(),
-            coordinator.store.has_gateway_source_history()?,
-        )?;
+        let identity_key = coordinator.store.source_identity_key()?;
         let credential_revision = gateway_source_hash(&identity_key, &gateway.api_root, &token);
         let incoming = selected_models
             .iter()
@@ -616,50 +609,17 @@ fn rollback_committed(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Mutex};
+    use std::collections::HashMap;
 
     use serde_json::{json, Value};
     use tempfile::TempDir;
 
     use super::*;
-    use crate::{
-        models::{CapabilitySet, GatewayProfile, ManagedModel, TargetExpectation},
-        secrets::MISSING_SECRET_MESSAGE,
-    };
-
-    #[derive(Default)]
-    struct MemorySecretStore {
-        values: Mutex<HashMap<String, String>>,
-    }
-
-    impl SecretStore for MemorySecretStore {
-        fn set(&self, key: &str, secret: &str) -> CoreResult<()> {
-            self.values
-                .lock()
-                .unwrap()
-                .insert(key.to_string(), secret.to_string());
-            Ok(())
-        }
-
-        fn get(&self, key: &str) -> CoreResult<String> {
-            self.values
-                .lock()
-                .unwrap()
-                .get(key)
-                .cloned()
-                .ok_or_else(|| CoreError::SecretStore(MISSING_SECRET_MESSAGE.to_string()))
-        }
-
-        fn delete(&self, key: &str) -> CoreResult<()> {
-            self.values.lock().unwrap().remove(key);
-            Ok(())
-        }
-    }
+    use crate::models::{CapabilitySet, GatewayProfile, ManagedModel, TargetExpectation};
 
     struct Fixture {
         directory: TempDir,
         store: Store,
-        secrets: Arc<MemorySecretStore>,
         paths: HashMap<TargetKind, String>,
         backup_root: PathBuf,
     }
@@ -672,7 +632,6 @@ mod tests {
                 id: "gateway".to_string(),
                 name: "Gateway".to_string(),
                 api_root: "https://api.example.com/v1".to_string(),
-                token_ref: "gateway".to_string(),
                 created_at: "2026-08-20T00:00:00Z".to_string(),
                 updated_at: "2026-08-20T00:00:00Z".to_string(),
             };
@@ -691,8 +650,6 @@ mod tests {
                     updated_at: "2026-08-20T00:00:00Z".to_string(),
                 })
                 .unwrap();
-            let secrets = Arc::new(MemorySecretStore::default());
-            secrets.set("gateway", "test-token").unwrap();
             let paths = HashMap::from([
                 (
                     TargetKind::Workbuddy,
@@ -715,7 +672,6 @@ mod tests {
             Self {
                 directory,
                 store,
-                secrets,
                 paths,
                 backup_root,
             }
@@ -724,7 +680,6 @@ mod tests {
         fn coordinator(&self) -> PublishCoordinator<'_> {
             PublishCoordinator {
                 store: &self.store,
-                secrets: self.secrets.clone(),
                 backup_root: &self.backup_root,
             }
         }
@@ -750,12 +705,8 @@ mod tests {
                 })
                 .collect();
             let gateway = self.store.gateway("gateway").unwrap();
-            let token = self.secrets.get("gateway").unwrap();
-            let identity_key = source_identity_key(
-                self.secrets.as_ref(),
-                self.store.has_gateway_source_history().unwrap(),
-            )
-            .unwrap();
+            let token = self.store.gateway_token("gateway").unwrap();
+            let identity_key = self.store.source_identity_key().unwrap();
             ExecutePublishRequest {
                 gateway_id: "gateway".to_string(),
                 model_ids: vec!["gpt-5".to_string()],
@@ -1178,7 +1129,10 @@ mod tests {
         let path = fixture.path(TargetKind::Workbuddy);
         fs::write(&path, b"[]\n").unwrap();
         let request = fixture.request(vec![TargetKind::Workbuddy]);
-        fixture.secrets.set("gateway", "rotated-token").unwrap();
+        fixture
+            .store
+            .save_gateway_token("gateway", "rotated-token")
+            .unwrap();
 
         let error = fixture
             .coordinator()

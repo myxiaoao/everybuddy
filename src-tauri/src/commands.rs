@@ -1,7 +1,4 @@
-use std::{
-    collections::HashSet,
-    sync::{Arc, MutexGuard},
-};
+use std::{collections::HashSet, sync::MutexGuard};
 
 use chrono::Utc;
 use tauri::State;
@@ -33,13 +30,9 @@ pub fn bootstrap(state: State<'_, AppState>) -> CommandResult<BootstrapData> {
         .store
         .settings(default_target_paths().map_err(CommandError::from)?)
         .map_err(CommandError::from)?;
-    let import = TargetImportService::new(
-        &state.store,
-        Arc::clone(&state.secrets),
-        &settings.target_paths,
-    )
-    .bootstrap_import()
-    .map_err(CommandError::from)?;
+    let import = TargetImportService::new(&state.store, &settings.target_paths)
+        .bootstrap_import()
+        .map_err(CommandError::from)?;
     Ok(BootstrapData {
         gateways: state.store.list_gateways().map_err(CommandError::from)?,
         models: state.store.list_models().map_err(CommandError::from)?,
@@ -71,23 +64,18 @@ pub fn save_gateway(
         .transpose()
         .map_err(CommandError::from)?;
     let id = input.id.unwrap_or_else(|| Uuid::new_v4().to_string());
-    let token_ref = existing
-        .as_ref()
-        .map(|profile| profile.token_ref.clone())
-        .unwrap_or_else(|| id.clone());
     let replacement_token = input.token.as_deref();
     let profile = GatewayProfile {
         id: id.clone(),
         name: name.to_string(),
         api_root,
-        token_ref,
         created_at: existing
             .map(|profile| profile.created_at)
             .unwrap_or_else(|| now.clone()),
         updated_at: now,
     };
 
-    let models_invalidated = GatewayService::new(&state.store, Arc::clone(&state.secrets))
+    let models_invalidated = GatewayService::new(&state.store)
         .save_optional(&profile, replacement_token)
         .map_err(CommandError::from)?;
     Ok(SaveGatewayResult {
@@ -99,7 +87,7 @@ pub fn save_gateway(
 #[tauri::command]
 pub fn delete_gateway(id: String, state: State<'_, AppState>) -> CommandResult<()> {
     let _mutation = lock_app_mutation(state.inner())?;
-    GatewayService::new(&state.store, Arc::clone(&state.secrets))
+    GatewayService::new(&state.store)
         .delete(&id)
         .map_err(CommandError::from)
 }
@@ -175,12 +163,7 @@ pub fn get_target_snapshot(state: State<'_, AppState>) -> CommandResult<TargetSn
         .store
         .settings(default_target_paths().map_err(CommandError::from)?)
         .map_err(CommandError::from)?;
-    read_target_snapshot(
-        &state.store,
-        Arc::clone(&state.secrets),
-        &settings.target_paths,
-    )
-    .map_err(CommandError::from)
+    read_target_snapshot(&state.store, &settings.target_paths).map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -273,18 +256,12 @@ pub fn save_settings(
 fn coordinator(state: &AppState) -> PublishCoordinator<'_> {
     PublishCoordinator {
         store: &state.store,
-        secrets: Arc::clone(&state.secrets),
         backup_root: &state.backup_root,
     }
 }
 
 fn model_lifecycle(state: &AppState) -> ModelLifecycle<'_> {
-    ModelLifecycle::new(
-        &state.store,
-        &state.secrets,
-        &state.gateway_client,
-        &state.app_mutation,
-    )
+    ModelLifecycle::new(&state.store, &state.gateway_client, &state.app_mutation)
 }
 
 fn lock_app_mutation(state: &AppState) -> CommandResult<MutexGuard<'_, ()>> {
@@ -759,7 +736,6 @@ mod tests {
             id: "gateway".to_string(),
             name: "Gateway".to_string(),
             api_root: "https://api.example.com/v1".to_string(),
-            token_ref: "gateway".to_string(),
             created_at: "2026-08-20T00:00:00Z".to_string(),
             updated_at: "2026-08-20T00:00:00Z".to_string(),
         };

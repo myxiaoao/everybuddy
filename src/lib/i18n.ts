@@ -11,9 +11,11 @@ const messages = {
     gatewayName: "名称",
     gatewayUrl: "API Base URL",
     gatewayToken: "Token Key",
-    gatewayTokenHint: "Token 只保存在系统凭据库中，默认隐藏。",
+    gatewayTokenHint:
+      "Token 保存在 EveryBuddy 的本地 SQLite 数据库中，默认隐藏。",
     gatewayTokenSaved: "已保存凭据",
-    gatewayTokenEditHint: "凭据已保存在系统凭据库中；留空表示不替换。",
+    gatewayTokenEditHint:
+      "Token 已保存在本地 SQLite 数据库中；留空表示不替换。",
     showToken: "显示 Token",
     hideToken: "隐藏 Token",
     saveAndDiscover: "保存并发现模型",
@@ -176,9 +178,6 @@ const messages = {
     importIssueCustomProtocol: "自定义协议不支持自动导入。",
     importIssueAmbiguousModel: "存在多个匹配的本地模型，无法确定来源。",
     importIssueAmbiguousGateway: "存在多个候选 API，无法安全匹配凭据。",
-    importIssueCredentialImportFailed: "Token 无法保存到系统凭据库。",
-    importIssueCredentialUnavailable:
-      "系统凭据库暂时不可用，未自动匹配此 API。",
     importIssueTargetConflict:
       "与 WorkBuddy 参数不一致，已保留 WorkBuddy 导入结果。",
     importIssueModelConflict: "本地同名模型使用了不同的接口地址。",
@@ -247,9 +246,9 @@ const messages = {
     errorConflictTitle: "存在模型冲突",
     errorConflictMessage: "目标中已有相同 Model ID 的配置。",
     errorConflictRecovery: "返回发布预览，确认每个冲突后再发布。",
-    errorSecretTitle: "无法读取 Token",
-    errorSecretMessage: "系统凭据库未返回此 API 的 Token。",
-    errorSecretRecovery: "重新编辑并保存 API Token 后重试。",
+    errorCredentialTitle: "无法读取 Token",
+    errorCredentialMessage: "本地数据库中没有此 API 的 Token。",
+    errorCredentialRecovery: "重新编辑并保存 API Token 后重试。",
     errorStorageTitle: "本地存储不可用",
     errorStorageMessage: "EveryBuddy 无法读写本地数据。",
     errorStorageRecovery: "检查磁盘空间和当前用户权限后重试。",
@@ -306,10 +305,10 @@ const messages = {
     gatewayUrl: "API Base URL",
     gatewayToken: "Token key",
     gatewayTokenHint:
-      "The token stays in your system credential store and is hidden by default.",
+      "The token stays in EveryBuddy's local SQLite database and is hidden by default.",
     gatewayTokenSaved: "Credential saved",
     gatewayTokenEditHint:
-      "The credential is saved in your system credential store. Leave this blank to keep it unchanged.",
+      "The token is saved in the local SQLite database. Leave this blank to keep it unchanged.",
     showToken: "Show token",
     hideToken: "Hide token",
     saveAndDiscover: "Save and discover",
@@ -489,10 +488,6 @@ const messages = {
       "Multiple local models match, so the source is ambiguous.",
     importIssueAmbiguousGateway:
       "Multiple API candidates exist, so the credential cannot be matched safely.",
-    importIssueCredentialImportFailed:
-      "The token could not be saved to the system credential store.",
-    importIssueCredentialUnavailable:
-      "The system credential store is unavailable, so this API was not matched automatically.",
     importIssueTargetConflict:
       "Parameters differ from WorkBuddy, so the WorkBuddy import was kept.",
     importIssueModelConflict:
@@ -576,10 +571,10 @@ const messages = {
       "The target already contains a configuration with the same Model ID.",
     errorConflictRecovery:
       "Return to the publish preview and confirm each conflict before publishing.",
-    errorSecretTitle: "Token unavailable",
-    errorSecretMessage:
-      "The system credential store did not return this API token.",
-    errorSecretRecovery: "Edit the API, save the token again, and retry.",
+    errorCredentialTitle: "Token unavailable",
+    errorCredentialMessage:
+      "The local database does not contain this API token.",
+    errorCredentialRecovery: "Edit the API, save the token again, and retry.",
     errorStorageTitle: "Local storage unavailable",
     errorStorageMessage: "EveryBuddy could not read or write local data.",
     errorStorageRecovery:

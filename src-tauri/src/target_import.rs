@@ -1,8 +1,4 @@
-use std::{
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
 use serde::Serialize;
@@ -10,14 +6,13 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    error::{CoreError, CoreResult},
+    error::CoreResult,
     gateway::{normalize_api_root, normalize_request_url},
-    gateway_service::{gateway_source_hash, source_identity_key},
+    gateway_service::gateway_source_hash,
     models::{
         GatewayProfile, ManagedModel, TargetImportIssue, TargetImportReport, TargetKind,
         TargetModelState, TargetSnapshot,
     },
-    secrets::{SecretStore, MISSING_SECRET_MESSAGE},
     store::Store,
     target::{target_inspections, TargetInspection},
     target_codec::{DecodedTargetModel as ParsedEntry, ModelIdentity},
@@ -33,45 +28,25 @@ pub struct TargetImportResult {
 
 pub struct TargetImportService<'a> {
     store: &'a Store,
-    secrets: Arc<dyn SecretStore>,
     paths: &'a HashMap<TargetKind, String>,
 }
 
 impl<'a> TargetImportService<'a> {
-    pub fn new(
-        store: &'a Store,
-        secrets: Arc<dyn SecretStore>,
-        paths: &'a HashMap<TargetKind, String>,
-    ) -> Self {
-        Self {
-            store,
-            secrets,
-            paths,
-        }
+    pub fn new(store: &'a Store, paths: &'a HashMap<TargetKind, String>) -> Self {
+        Self { store, paths }
     }
 
     pub fn bootstrap_import(&self) -> CoreResult<TargetImportResult> {
         let inspections = target_inspections(self.store, self.paths)?;
-        let written_secret_refs = RefCell::new(Vec::new());
-        let import = self.store.import_missing_serialized(
-            |gateways, models, deleted_sources, source_history_exists| {
-                let identity_key =
-                    source_identity_key(self.secrets.as_ref(), source_history_exists)?;
-                let mut context = ImportContext::from_snapshots(
-                    gateways,
-                    models,
-                    deleted_sources,
-                    Arc::clone(&self.secrets),
-                    identity_key,
-                )?;
+        let report = self.store.import_missing_serialized(
+            |gateways, models, deleted_sources, identity_key| {
+                let mut context =
+                    ImportContext::from_snapshots(gateways, models, deleted_sources, identity_key)?;
                 let mut report = TargetImportReport::default();
                 let mut baselines = HashMap::new();
 
                 for inspection in &inspections {
-                    let import =
-                        self.import_target(inspection, &mut context, &mut baselines, &mut report);
-                    *written_secret_refs.borrow_mut() = context.written_secret_refs.clone();
-                    import?;
+                    self.import_target(inspection, &mut context, &mut baselines, &mut report)?;
                 }
 
                 report.imported_gateway_count = context.new_gateways.len();
@@ -79,22 +54,13 @@ impl<'a> TargetImportService<'a> {
                 Ok((
                     report,
                     context.new_gateways,
+                    context.recovered_credentials,
                     context.source_identities,
                     context.new_models,
                 ))
             },
-        );
-        let report = match import {
-            Ok(report) => report,
-            Err(error) => {
-                return Err(cleanup_import_credentials(
-                    self.secrets.as_ref(),
-                    &written_secret_refs.into_inner(),
-                    error,
-                ));
-            }
-        };
-        let context = ImportContext::load(self.store, Arc::clone(&self.secrets))?;
+        )?;
+        let context = ImportContext::load(self.store)?;
         let states = target_model_states_from_inspections(&inspections, &context)?;
         let targets = inspections
             .into_iter()
@@ -226,19 +192,17 @@ impl<'a> TargetImportService<'a> {
 #[cfg(test)]
 pub fn get_target_model_states(
     store: &Store,
-    secrets: Arc<dyn SecretStore>,
     paths: &HashMap<TargetKind, String>,
 ) -> CoreResult<Vec<TargetModelState>> {
-    Ok(get_target_snapshot(store, secrets, paths)?.target_model_states)
+    Ok(get_target_snapshot(store, paths)?.target_model_states)
 }
 
 pub fn get_target_snapshot(
     store: &Store,
-    secrets: Arc<dyn SecretStore>,
     paths: &HashMap<TargetKind, String>,
 ) -> CoreResult<TargetSnapshot> {
     let inspections = target_inspections(store, paths)?;
-    let context = ImportContext::load(store, secrets)?;
+    let context = ImportContext::load(store)?;
     let target_model_states = target_model_states_from_inspections(&inspections, &context)?;
     let targets = inspections
         .into_iter()
@@ -299,12 +263,11 @@ fn match_target_state(
 }
 
 struct ImportContext {
-    secrets: Arc<dyn SecretStore>,
     gateways: Vec<GatewaySnapshot>,
     models: Vec<ManagedModel>,
-    new_gateways: Vec<(GatewayProfile, String)>,
+    new_gateways: Vec<(GatewayProfile, String, String)>,
+    recovered_credentials: Vec<(String, String)>,
     new_models: Vec<ManagedModel>,
-    written_secret_refs: Vec<String>,
     deleted_sources: HashSet<String>,
     identity_key: String,
     source_identities: Vec<(String, String)>,
@@ -312,49 +275,32 @@ struct ImportContext {
 }
 
 impl ImportContext {
-    fn load(store: &Store, secrets: Arc<dyn SecretStore>) -> CoreResult<Self> {
-        let identity_key =
-            source_identity_key(secrets.as_ref(), store.has_gateway_source_history()?)?;
+    fn load(store: &Store) -> CoreResult<Self> {
+        let identity_key = store.source_identity_key()?;
         Self::from_snapshots(
-            store.list_gateways()?,
+            store.gateway_snapshots()?,
             store.list_models()?,
             HashSet::new(),
-            secrets,
             identity_key,
         )
     }
 
     fn from_snapshots(
-        gateways: Vec<GatewayProfile>,
+        gateways: Vec<(GatewayProfile, Option<String>)>,
         models: Vec<ManagedModel>,
         deleted_sources: HashSet<String>,
-        secrets: Arc<dyn SecretStore>,
         identity_key: String,
     ) -> CoreResult<Self> {
         let gateways = gateways
             .into_iter()
-            .map(|profile| {
-                let (token, credential_unavailable) = match secrets.get(&profile.token_ref) {
-                    Ok(token) => (Some(token), false),
-                    Err(CoreError::SecretStore(message)) if message == MISSING_SECRET_MESSAGE => {
-                        (None, false)
-                    }
-                    Err(_) => (None, true),
-                };
-                GatewaySnapshot {
-                    profile,
-                    token,
-                    credential_unavailable,
-                }
-            })
+            .map(|(profile, token)| GatewaySnapshot { profile, token })
             .collect();
         let mut context = Self {
-            secrets,
             gateways,
             models,
             new_gateways: Vec::new(),
+            recovered_credentials: Vec::new(),
             new_models: Vec::new(),
-            written_secret_refs: Vec::new(),
             deleted_sources,
             identity_key,
             source_identities: Vec::new(),
@@ -429,7 +375,7 @@ impl ImportContext {
     fn is_new_gateway(&self, gateway_id: &str) -> bool {
         self.new_gateways
             .iter()
-            .any(|(gateway, _)| gateway.id == gateway_id)
+            .any(|(gateway, _, _)| gateway.id == gateway_id)
     }
 
     fn record_source_identity(&mut self, model_key: &str, entry: &ParsedEntry) {
@@ -482,9 +428,7 @@ impl ImportContext {
             .iter()
             .enumerate()
             .filter(|(_, gateway)| {
-                gateway.profile.api_root == entry.api_root
-                    && gateway.token.is_none()
-                    && !gateway.credential_unavailable
+                gateway.profile.api_root == entry.api_root && gateway.token.is_none()
             })
             .map(|(index, _)| index)
             .collect();
@@ -498,37 +442,16 @@ impl ImportContext {
             return Ok(None);
         }
         if let Some(index) = missing.first().copied() {
-            let token_ref = self.gateways[index].profile.token_ref.clone();
-            if self.secrets.set(&token_ref, &entry.token).is_err() {
-                report.issues.push(issue(
-                    entry.target,
-                    Some(entry.model_id.clone()),
-                    "credentialImportFailed",
-                    "Could not save the imported credential".to_string(),
-                ));
-                return Ok(None);
-            }
-            self.written_secret_refs.push(token_ref);
+            let gateway_id = self.gateways[index].profile.id.clone();
+            self.recovered_credentials
+                .push((gateway_id.clone(), entry.token.clone()));
             self.gateways[index].token = Some(entry.token.clone());
             self.rebuild_model_identity_index();
-            let gateway_id = self.gateways[index].profile.id.clone();
             let source_hash =
                 gateway_source_hash(&self.identity_key, &entry.api_root, &entry.token);
             self.source_identities
                 .push((gateway_id.clone(), source_hash));
             return Ok(Some(gateway_id));
-        }
-
-        if self.gateways.iter().any(|gateway| {
-            gateway.profile.api_root == entry.api_root && gateway.credential_unavailable
-        }) {
-            report.issues.push(issue(
-                entry.target,
-                Some(entry.model_id.clone()),
-                "credentialUnavailable",
-                "The system credential store is unavailable for a matching API profile".to_string(),
-            ));
-            return Ok(None);
         }
 
         if self.deleted_sources.contains(&gateway_source_hash(
@@ -545,55 +468,23 @@ impl ImportContext {
             id: id.clone(),
             name: imported_gateway_name(entry.target, &entry.api_root),
             api_root: entry.api_root.clone(),
-            token_ref: id.clone(),
             created_at: now.clone(),
             updated_at: now,
         };
-        if self.secrets.set(&profile.token_ref, &entry.token).is_err() {
-            report.issues.push(issue(
-                entry.target,
-                Some(entry.model_id.clone()),
-                "credentialImportFailed",
-                "Could not save the imported credential".to_string(),
-            ));
-            return Ok(None);
-        }
-        self.written_secret_refs.push(profile.token_ref.clone());
         self.gateways.push(GatewaySnapshot {
             profile: profile.clone(),
             token: Some(entry.token.clone()),
-            credential_unavailable: false,
         });
         let source_hash = gateway_source_hash(&self.identity_key, &entry.api_root, &entry.token);
-        self.new_gateways.push((profile, source_hash));
+        self.new_gateways
+            .push((profile, entry.token.clone(), source_hash));
         Ok(Some(id))
-    }
-}
-
-fn cleanup_import_credentials(
-    secrets: &dyn SecretStore,
-    keys: &[String],
-    primary: CoreError,
-) -> CoreError {
-    let mut cleanup_failed = false;
-    for key in keys.iter().rev() {
-        if secrets.delete(key).is_err() {
-            cleanup_failed = true;
-        }
-    }
-    if cleanup_failed {
-        CoreError::SecretStore(
-            "Could not import target configuration, and credential cleanup also failed".to_string(),
-        )
-    } else {
-        primary
     }
 }
 
 struct GatewaySnapshot {
     profile: GatewayProfile,
     token: Option<String>,
-    credential_unavailable: bool,
 }
 
 fn issue(

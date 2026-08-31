@@ -12,7 +12,6 @@ pub struct GatewayProfile {
     pub id: String,
     pub name: String,
     pub api_root: String,
-    pub token_ref: String,
     pub created_at: String,
     pub updated_at: String,
 }

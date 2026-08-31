@@ -7,7 +7,7 @@ use crate::{
 
 pub(super) fn query_gateways(connection: &Connection) -> CoreResult<Vec<GatewayProfile>> {
     let mut statement = connection.prepare(
-        "SELECT id, name, api_root, token_ref, created_at, updated_at
+        "SELECT id, name, api_root, created_at, updated_at
          FROM gateway_profiles ORDER BY name COLLATE NOCASE",
     )?;
     let rows = statement.query_map([], |row| {
@@ -15,9 +15,8 @@ pub(super) fn query_gateways(connection: &Connection) -> CoreResult<Vec<GatewayP
             id: row.get(0)?,
             name: row.get(1)?,
             api_root: row.get(2)?,
-            token_ref: row.get(3)?,
-            created_at: row.get(4)?,
-            updated_at: row.get(5)?,
+            created_at: row.get(3)?,
+            updated_at: row.get(4)?,
         })
     })?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -29,7 +28,7 @@ pub(super) fn query_gateway(
 ) -> CoreResult<Option<GatewayProfile>> {
     connection
         .query_row(
-            "SELECT id, name, api_root, token_ref, created_at, updated_at
+            "SELECT id, name, api_root, created_at, updated_at
              FROM gateway_profiles WHERE id = ?1",
             [id],
             |row| {
@@ -37,9 +36,8 @@ pub(super) fn query_gateway(
                     id: row.get(0)?,
                     name: row.get(1)?,
                     api_root: row.get(2)?,
-                    token_ref: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
+                    created_at: row.get(3)?,
+                    updated_at: row.get(4)?,
                 })
             },
         )
