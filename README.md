@@ -12,13 +12,13 @@
 
 EveryBuddy 是一款面向个人开发者的开源桌面应用。它集中管理多个 OpenAI-compatible API 来源，再把选中的模型配置发布到 WorkBuddy、CodeBuddy 或两个目标。
 
-> 当前稳定版本：`0.1.1`。EveryBuddy 会在发布前备份并校验目标配置，仍建议将现有 `models.json` 纳入本机备份。
+> 当前稳定版本：`0.1.2`。EveryBuddy 会在发布前备份并校验目标配置，仍建议将现有 `models.json` 纳入本机备份。
 
 ![EveryBuddy 工作区](docs/assets/everybuddy-workspace.png)
 
 ## 能做什么
 
-- 管理多个 API 来源，Token 保存到 macOS Keychain 或 Windows Credential Manager。
+- 管理多个 API 来源，Token 保存到 EveryBuddy 的本地 SQLite 数据库。
 - 通过 `GET /v1/models` 发现模型，也可以手动添加未返回的模型。
 - 识别 Tool Call、Vision、Reasoning、Reasoning Effort 和常用模型参数。
 - 从 OpenRouter 读取指定模型的公开信息，或通过主动 Probe 和人工设置补充能力。
@@ -106,9 +106,9 @@ EveryBuddy 当前支持使用 Bearer Token 的 OpenAI-compatible API：
 
 ## Token 安全边界
 
-EveryBuddy 不把明文 Token 写入 SQLite、诊断日志或前端持久化状态。WorkBuddy 和 CodeBuddy 的配置协议要求 `models.json` 包含明文 `apiKey`，发布模型时必须把 Token 写入目标配置，目标配置的备份也可能包含相同 Token。
+EveryBuddy 会把明文 Token 写入本地 SQLite 数据库。用户打开「编辑 API」时，应用会按 Gateway ID 读取当前 Token，并通过专用 Tauri IPC 返回到当前 Dialog；Token 默认隐藏，关闭 Dialog 后从前端状态清除。Token 不会进入 bootstrap 数据、模型 metadata、诊断日志或错误对象。WorkBuddy 和 CodeBuddy 的配置协议要求 `models.json` 包含明文 `apiKey`，发布模型时必须把 Token 写入目标配置，目标配置的备份也可能包含相同 Token。
 
-不要把目标配置、备份或未经检查的诊断日志提交到 Git、上传到公开附件，或存放在不受保护的同步目录。详细边界和日志位置见 [安全策略](SECURITY.md) 与 [故障排查](docs/TROUBLESHOOTING.md)。
+不要把 EveryBuddy 数据库、目标配置、备份或未经检查的诊断日志提交到 Git、上传到公开附件，或存放在不受保护的同步目录。详细边界和日志位置见 [安全策略](SECURITY.md) 与 [故障排查](docs/TROUBLESHOOTING.md)。
 
 ## 本地开发
 
@@ -132,7 +132,7 @@ pnpm tauri dev
 pnpm dev
 ```
 
-打开 `http://localhost:1420/?demo=1`。Demo 使用本地模拟数据，不访问目标配置、API 或系统凭据库。
+打开 `http://localhost:1420/?demo=1`。Demo 使用本地模拟数据，不访问目标配置、API 或 EveryBuddy 持久化数据库。
 
 验证完整代码库：
 

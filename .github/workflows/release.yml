@@ -128,14 +128,14 @@ jobs:
           tagName: v__VERSION__
           releaseName: EveryBuddy v__VERSION__
           releaseBody: |
-            EveryBuddy 0.1.1 improves model capability setup and target configuration tracking.
+            EveryBuddy 0.1.2 improves credential handling and target workflow safety.
 
             ## Highlights
 
-            - Apply OpenRouter model details directly to catalog-matched models while preserving local routing settings.
-            - Reconcile the Configured state from the current WorkBuddy and CodeBuddy `models.json` files on startup and refresh.
-            - Prefix published model names with their API source names while preserving upstream model IDs.
-            - Refine API source and model capability actions, documentation, and screenshots.
+            - Store API source tokens in EveryBuddy's local SQLite database with private per-user file permissions.
+            - Show the saved token when editing an API source, masked by default with an explicit visibility toggle.
+            - Commit API source imports, credentials, models, and provenance atomically with clearer recovery when a token is missing.
+            - Harden target preview, write, drift detection, and rollback behavior across WorkBuddy and CodeBuddy.
 
             ## Unsigned Installers
 

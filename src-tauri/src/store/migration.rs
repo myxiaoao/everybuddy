@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::error::{CoreError, CoreResult};
 
-pub(super) const SCHEMA_VERSION: i64 = 3;
+pub(super) const SCHEMA_VERSION: i64 = 4;
 
 pub(super) fn migrate(
     connection: &mut Connection,
@@ -41,6 +41,13 @@ pub(super) fn migrate(
             token_ref TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS gateway_credentials (
+            gateway_id TEXT PRIMARY KEY,
+            token TEXT NOT NULL CHECK(length(token) > 0),
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(gateway_id) REFERENCES gateway_profiles(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS models (
@@ -119,8 +126,25 @@ pub(super) fn migrate(
     if current_version < 3 {
         invalidate_legacy_custom_protocol_urls(&transaction)?;
     }
+    if current_version < 4 {
+        migrate_credentials_to_sqlite(&transaction)?;
+    }
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;
+    Ok(())
+}
+
+fn migrate_credentials_to_sqlite(transaction: &Transaction<'_>) -> CoreResult<()> {
+    transaction.execute("DELETE FROM gateway_source_identities", [])?;
+    transaction.execute("DELETE FROM deleted_gateway_sources", [])?;
+    transaction.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![
+            crate::secrets::SOURCE_IDENTITY_KEY_SETTING,
+            format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+        ],
+    )?;
     Ok(())
 }
 
@@ -171,11 +195,14 @@ fn backup_before_migration(
     })?;
     let backup_directory = parent.join("migration-backups");
     std::fs::create_dir_all(&backup_directory)?;
+    crate::file_permissions::secure_directory(&backup_directory)?;
     let timestamp = Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
     let backup_path = backup_directory.join(format!(
         "everybuddy-v{current_version}-{timestamp}-{}.db",
         Uuid::new_v4()
     ));
+    crate::file_permissions::create_private_file(&backup_path)?;
     connection.backup(DatabaseName::Main, &backup_path, None)?;
+    crate::file_permissions::secure_path(&backup_path)?;
     Ok(())
 }

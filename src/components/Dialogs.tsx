@@ -216,7 +216,12 @@ export function GatewayDialog({
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    onSubmit({ id: gateway?.id, name, baseUrl, token });
+    onSubmit({
+      id: gateway?.id,
+      name,
+      baseUrl,
+      ...(token.trim() !== initialToken ? { token: token.trim() } : {}),
+    });
   }
 
   return (
@@ -295,7 +300,9 @@ export function GatewayDialog({
               )}
             </Button>
           </div>
-          <small id={`${tokenInputId}-hint`}>{t("gatewayTokenHint")}</small>
+          <small id={`${tokenInputId}-hint`}>
+            {t(gateway ? "gatewayTokenEditHint" : "gatewayTokenHint")}
+          </small>
         </div>
       </form>
     </Modal>

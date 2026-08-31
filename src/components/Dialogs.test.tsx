@@ -23,7 +23,6 @@ describe("ManualModelDialog", () => {
           id: "gateway-1",
           name: "Gateway",
           apiRoot: "https://api.example.com/v1",
-          tokenRef: "credential-1",
           createdAt: "2026-08-27T00:00:00Z",
           updatedAt: "2026-08-27T00:00:00Z",
         }}
@@ -44,6 +43,36 @@ describe("ManualModelDialog", () => {
 });
 
 describe("PublishDialog", () => {
+  it("does not imply that the target runtime has already reloaded", () => {
+    render(
+      <PublishDialog
+        open
+        busy={false}
+        preview={null}
+        result={{
+          success: true,
+          results: [
+            {
+              target: "workbuddy",
+              success: true,
+              rollbackAttempted: false,
+              rolledBack: false,
+              message: "Verified write",
+            },
+          ],
+        }}
+        t={createTranslator("zh-CN")}
+        onClose={() => undefined}
+        onConfirm={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("dialog")).toHaveAccessibleName("模型配置已写入");
+    expect(
+      screen.getByText(/可能需要重新加载或重启后生效/),
+    ).toBeInTheDocument();
+  });
+
   it("distinguishes rolled back and failed targets", () => {
     const result: PublishResult = {
       success: false,

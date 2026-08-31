@@ -56,11 +56,11 @@ export function localizedError(error: AppError, t: Translator) {
         message: t("errorConflictMessage"),
         recovery: t("errorConflictRecovery"),
       };
-    case "SECRET_STORE_ERROR":
+    case "CREDENTIAL_ERROR":
       return {
-        title: t("errorSecretTitle"),
-        message: t("errorSecretMessage"),
-        recovery: t("errorSecretRecovery"),
+        title: t("errorCredentialTitle"),
+        message: t("errorCredentialMessage"),
+        recovery: t("errorCredentialRecovery"),
       };
     case "STORAGE_ERROR":
       return {

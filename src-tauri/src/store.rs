@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    path::Path,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::{Mutex, MutexGuard},
     time::Duration,
@@ -8,10 +8,12 @@ use std::{
 
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use uuid::Uuid;
 
 use crate::{
     error::{CoreError, CoreResult},
     models::{AppSettings, BackupRecord, GatewayProfile, ManagedModel, TargetKind},
+    secrets::{MISSING_CREDENTIAL_MESSAGE, SOURCE_IDENTITY_KEY_SETTING},
 };
 
 mod migration;
@@ -37,10 +39,16 @@ pub struct TargetStateUpdate {
 
 impl Store {
     pub fn open(path: &Path) -> CoreResult<Self> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        let parent = path.parent().ok_or_else(|| {
+            CoreError::Storage("The database path has no parent directory".to_string())
+        })?;
+        std::fs::create_dir_all(parent)?;
+        crate::file_permissions::secure_directory(parent)?;
         let database_existed = path.exists() && path.metadata()?.len() > 0;
+        if !path.exists() {
+            crate::file_permissions::create_private_file(path)?;
+        }
+        secure_database_files(path)?;
         let mut connection = Connection::open(path)?;
         let current_version: i64 =
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -53,6 +61,7 @@ impl Store {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.busy_timeout(Duration::from_secs(5))?;
         migration::migrate(&mut connection, path, current_version, database_existed)?;
+        secure_database_files(path)?;
         let store = Self {
             connection: Mutex::new(connection),
         };
@@ -70,41 +79,80 @@ impl Store {
         query_gateways(&connection)
     }
 
+    pub(crate) fn gateway_snapshots(&self) -> CoreResult<Vec<(GatewayProfile, Option<String>)>> {
+        let connection = self.connection()?;
+        query_gateways_with_tokens(&connection)
+    }
+
     pub fn gateway(&self, id: &str) -> CoreResult<GatewayProfile> {
         self.find_gateway(id)?
             .ok_or_else(|| CoreError::Validation("Gateway profile not found".to_string()))
     }
 
     pub fn find_gateway(&self, id: &str) -> CoreResult<Option<GatewayProfile>> {
-        let profile = self
-            .connection()?
-            .query_row(
-                "SELECT id, name, api_root, token_ref, created_at, updated_at
-                 FROM gateway_profiles WHERE id = ?1",
-                [id],
-                |row| {
-                    Ok(GatewayProfile {
-                        id: row.get(0)?,
-                        name: row.get(1)?,
-                        api_root: row.get(2)?,
-                        token_ref: row.get(3)?,
-                        created_at: row.get(4)?,
-                        updated_at: row.get(5)?,
-                    })
-                },
-            )
-            .optional()?;
-        Ok(profile)
+        let connection = self.connection()?;
+        query_gateway(&connection, id)
+    }
+
+    pub fn gateway_with_token(&self, id: &str) -> CoreResult<(GatewayProfile, String)> {
+        let connection = self.connection()?;
+        let profile = query_gateway(&connection, id)?
+            .ok_or_else(|| CoreError::Validation("Gateway profile not found".to_string()))?;
+        let token = query_gateway_token(&connection, id)?.ok_or_else(missing_credential_error)?;
+        Ok((profile, token))
+    }
+
+    pub fn gateway_token(&self, id: &str) -> CoreResult<String> {
+        self.optional_gateway_token(id)?
+            .ok_or_else(missing_credential_error)
+    }
+
+    pub fn optional_gateway_token(&self, id: &str) -> CoreResult<Option<String>> {
+        let connection = self.connection()?;
+        query_gateway_token(&connection, id)
+    }
+
+    pub fn source_identity_key(&self) -> CoreResult<String> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let key = source_identity_key(&transaction)?;
+        transaction.commit()?;
+        Ok(key)
     }
 
     #[cfg(test)]
     pub fn save_gateway(&self, profile: &GatewayProfile) -> CoreResult<()> {
-        self.save_gateway_with_provenance(profile, false, None, None)
+        self.save_gateway_with_provenance(profile, "test-token", false, None, None)
+    }
+
+    #[cfg(test)]
+    pub fn save_gateway_without_credential(&self, profile: &GatewayProfile) -> CoreResult<()> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        upsert_gateway_profile(&transaction, profile)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn save_gateway_token(&self, gateway_id: &str, token: &str) -> CoreResult<()> {
+        let connection = self.connection()?;
+        upsert_gateway_credential(&connection, gateway_id, token)
+    }
+
+    #[cfg(test)]
+    pub fn delete_gateway_token(&self, gateway_id: &str) -> CoreResult<()> {
+        self.connection()?.execute(
+            "DELETE FROM gateway_credentials WHERE gateway_id = ?1",
+            [gateway_id],
+        )?;
+        Ok(())
     }
 
     pub fn save_gateway_with_provenance(
         &self,
         profile: &GatewayProfile,
+        token: &str,
         invalidate_models: bool,
         source_hash: Option<&str>,
         previous_source_hash: Option<&str>,
@@ -112,24 +160,8 @@ impl Store {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         let stored_source_hashes = gateway_source_hashes(&transaction, &profile.id)?;
-        transaction.execute(
-            r#"INSERT INTO gateway_profiles
-               (id, name, api_root, token_ref, created_at, updated_at)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-               ON CONFLICT(id) DO UPDATE SET
-                 name = excluded.name,
-                 api_root = excluded.api_root,
-                 token_ref = excluded.token_ref,
-                 updated_at = excluded.updated_at"#,
-            params![
-                profile.id,
-                profile.name,
-                profile.api_root,
-                profile.token_ref,
-                profile.created_at,
-                profile.updated_at
-            ],
-        )?;
+        upsert_gateway_profile(&transaction, profile)?;
+        upsert_gateway_credential(&transaction, &profile.id, token)?;
         if let Some(source_hash) = source_hash {
             if invalidate_models {
                 for retired_source_hash in &stored_source_hashes {
@@ -231,6 +263,7 @@ impl Store {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn has_gateway_source_history(&self) -> CoreResult<bool> {
         Ok(self.connection()?.query_row(
             "SELECT EXISTS(SELECT 1 FROM gateway_source_identities)
@@ -267,52 +300,40 @@ impl Store {
     pub fn import_missing_serialized<T, F>(&self, operation: F) -> CoreResult<T>
     where
         F: FnOnce(
-            Vec<GatewayProfile>,
+            Vec<(GatewayProfile, Option<String>)>,
             Vec<ManagedModel>,
             HashSet<String>,
-            bool,
+            String,
         ) -> CoreResult<(
             T,
-            Vec<(GatewayProfile, String)>,
+            Vec<(GatewayProfile, String, String)>,
+            Vec<(String, String)>,
             Vec<(String, String)>,
             Vec<ManagedModel>,
         )>,
     {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let gateways = query_gateways(&transaction)?;
+        let gateways = query_gateways_with_tokens(&transaction)?;
         let models = query_models(&transaction, None)?;
         let deleted_sources = transaction
             .prepare("SELECT source_hash FROM deleted_gateway_sources")?
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<Result<HashSet<_>, _>>()?;
-        let source_history_exists = !deleted_sources.is_empty()
-            || transaction.query_row(
-                "SELECT EXISTS(SELECT 1 FROM gateway_source_identities)",
-                [],
-                |row| row.get(0),
-            )?;
-        let (result, new_gateways, source_identities, new_models) =
-            operation(gateways, models, deleted_sources, source_history_exists)?;
-        for (gateway, source_hash) in &new_gateways {
-            transaction.execute(
-                r#"INSERT OR IGNORE INTO gateway_profiles
-                   (id, name, api_root, token_ref, created_at, updated_at)
-                   VALUES (?1, ?2, ?3, ?4, ?5, ?6)"#,
-                params![
-                    gateway.id,
-                    gateway.name,
-                    gateway.api_root,
-                    gateway.token_ref,
-                    gateway.created_at,
-                    gateway.updated_at
-                ],
-            )?;
+        let identity_key = source_identity_key(&transaction)?;
+        let (result, new_gateways, recovered_credentials, source_identities, new_models) =
+            operation(gateways, models, deleted_sources, identity_key)?;
+        for (gateway, token, source_hash) in &new_gateways {
+            upsert_gateway_profile(&transaction, gateway)?;
+            upsert_gateway_credential(&transaction, &gateway.id, token)?;
             transaction.execute(
                 "INSERT OR IGNORE INTO gateway_source_identities (gateway_id, source_hash)
                  VALUES (?1, ?2)",
                 params![gateway.id, source_hash],
             )?;
+        }
+        for (gateway_id, token) in &recovered_credentials {
+            upsert_gateway_credential(&transaction, gateway_id, token)?;
         }
         for (gateway_id, source_hash) in &source_identities {
             transaction.execute(
@@ -340,10 +361,11 @@ impl Store {
         gateway_id: &str,
         ids: &[String],
     ) -> CoreResult<Vec<ManagedModel>> {
+        let selected_ids: std::collections::HashSet<_> = ids.iter().collect();
         let models = self.models_for_gateway(gateway_id)?;
         let selected: Vec<_> = models
             .into_iter()
-            .filter(|model| ids.contains(&model.id))
+            .filter(|model| selected_ids.contains(&model.id))
             .collect();
         if selected.len() != ids.len() {
             return Err(CoreError::Validation(
@@ -636,9 +658,133 @@ fn gateway_source_hashes(connection: &Connection, gateway_id: &str) -> CoreResul
     Ok(source_hashes)
 }
 
+fn query_gateway_token(connection: &Connection, gateway_id: &str) -> CoreResult<Option<String>> {
+    connection
+        .query_row(
+            "SELECT token FROM gateway_credentials WHERE gateway_id = ?1",
+            [gateway_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
+fn query_gateways_with_tokens(
+    connection: &Connection,
+) -> CoreResult<Vec<(GatewayProfile, Option<String>)>> {
+    let mut statement = connection.prepare(
+        "SELECT p.id, p.name, p.api_root, p.created_at, p.updated_at, c.token
+         FROM gateway_profiles p
+         LEFT JOIN gateway_credentials c ON c.gateway_id = p.id
+         ORDER BY p.name COLLATE NOCASE",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            GatewayProfile {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                api_root: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            },
+            row.get(5)?,
+        ))
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+fn upsert_gateway_profile(connection: &Connection, profile: &GatewayProfile) -> CoreResult<()> {
+    connection.execute(
+        r#"INSERT INTO gateway_profiles
+           (id, name, api_root, token_ref, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?1, ?4, ?5)
+           ON CONFLICT(id) DO UPDATE SET
+             name = excluded.name,
+             api_root = excluded.api_root,
+             updated_at = excluded.updated_at"#,
+        params![
+            profile.id,
+            profile.name,
+            profile.api_root,
+            profile.created_at,
+            profile.updated_at
+        ],
+    )?;
+    Ok(())
+}
+
+fn upsert_gateway_credential(
+    connection: &Connection,
+    gateway_id: &str,
+    token: &str,
+) -> CoreResult<()> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Err(CoreError::Validation("API token is required".to_string()));
+    }
+    connection.execute(
+        "INSERT INTO gateway_credentials (gateway_id, token, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(gateway_id) DO UPDATE SET
+           token = excluded.token,
+           updated_at = excluded.updated_at",
+        params![gateway_id, token, Utc::now().to_rfc3339()],
+    )?;
+    Ok(())
+}
+
+fn source_identity_key(connection: &Connection) -> CoreResult<String> {
+    if let Some(key) = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            [SOURCE_IDENTITY_KEY_SETTING],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+    {
+        return Ok(key);
+    }
+    let source_history_exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM gateway_source_identities)
+             OR EXISTS(SELECT 1 FROM deleted_gateway_sources)",
+        [],
+        |row| row.get(0),
+    )?;
+    if source_history_exists {
+        return Err(CoreError::Storage(
+            "The source identity key is missing from the local database".to_string(),
+        ));
+    }
+    let key = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    connection.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?1, ?2)",
+        params![SOURCE_IDENTITY_KEY_SETTING, key],
+    )?;
+    Ok(key)
+}
+
+fn missing_credential_error() -> CoreError {
+    CoreError::Credential(MISSING_CREDENTIAL_MESSAGE.to_string())
+}
+
+fn secure_database_files(path: &Path) -> CoreResult<()> {
+    let mut paths = vec![path.to_path_buf()];
+    for suffix in ["-wal", "-shm"] {
+        let mut sidecar = path.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        paths.push(PathBuf::from(sidecar));
+    }
+    for path in paths.into_iter().filter(|path| path.exists()) {
+        crate::file_permissions::secure_path(&path)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
+
+    #[cfg(unix)]
+    use std::path::PathBuf;
 
     use serde_json::json;
     use tempfile::tempdir;
@@ -662,6 +808,38 @@ mod tests {
         assert!(!directory.path().join("migration-backups").exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn database_files_use_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("everybuddy.db");
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(&path, []).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let _store = Store::open(&path).unwrap();
+
+        assert_eq!(
+            fs::metadata(directory.path()).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = PathBuf::from(format!("{}{suffix}", path.display()));
+            if sidecar.exists() {
+                assert_eq!(
+                    fs::metadata(sidecar).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+            }
+        }
+    }
+
     #[test]
     fn multiple_gateways_keep_same_upstream_model_id_isolated() {
         let directory = tempdir().unwrap();
@@ -670,7 +848,6 @@ mod tests {
             id: "gateway-1".to_string(),
             name: "Local gateway".to_string(),
             api_root: "http://127.0.0.1:3000/v1".to_string(),
-            token_ref: "gateway-1".to_string(),
             created_at: "2026-08-20T00:00:00Z".to_string(),
             updated_at: "2026-08-20T00:00:00Z".to_string(),
         };
@@ -681,7 +858,6 @@ mod tests {
                 id: "gateway-2".to_string(),
                 name: "Second gateway".to_string(),
                 api_root: "http://127.0.0.1:4000/v1".to_string(),
-                token_ref: "gateway-2".to_string(),
                 created_at: "2026-08-20T00:00:00Z".to_string(),
                 updated_at: "2026-08-20T00:00:00Z".to_string(),
             })
@@ -718,7 +894,6 @@ mod tests {
             id: "gateway".to_string(),
             name: "Gateway".to_string(),
             api_root: "https://api.example.com/v1".to_string(),
-            token_ref: "gateway".to_string(),
             created_at: "2026-08-20T00:00:00Z".to_string(),
             updated_at: "2026-08-20T00:00:00Z".to_string(),
         };
@@ -760,7 +935,6 @@ mod tests {
             id: "gateway".to_string(),
             name: "Gateway".to_string(),
             api_root: "https://api.example.com/v1".to_string(),
-            token_ref: "gateway".to_string(),
             created_at: "2026-08-20T00:00:00Z".to_string(),
             updated_at: "2026-08-20T00:00:00Z".to_string(),
         };
@@ -785,7 +959,6 @@ mod tests {
             id: "gateway".to_string(),
             name: "Gateway".to_string(),
             api_root: "https://api.example.com/v1".to_string(),
-            token_ref: "gateway".to_string(),
             created_at: "2026-08-20T00:00:00Z".to_string(),
             updated_at: "2026-08-20T00:00:00Z".to_string(),
         };
@@ -808,7 +981,7 @@ mod tests {
         edited.api_root = "https://changed.example.com/v1".to_string();
 
         store
-            .save_gateway_with_provenance(&edited, true, Some("new-source"), None)
+            .save_gateway_with_provenance(&edited, "test-token", true, Some("new-source"), None)
             .unwrap();
 
         assert!(store.models_for_gateway("gateway").unwrap().is_empty());
@@ -882,6 +1055,20 @@ mod tests {
             .unwrap();
         assert_eq!(backups.len(), 1);
 
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            assert_eq!(
+                fs::metadata(&backup_directory)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+        }
+
         let backup = Connection::open(backups[0].path()).unwrap();
         let backup_columns = backup
             .prepare("PRAGMA table_info(models)")
@@ -893,6 +1080,145 @@ mod tests {
         assert!(!backup_columns
             .iter()
             .any(|column| column == "configuration_json"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            assert_eq!(
+                backups[0].metadata().unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn migrates_v3_credentials_and_source_identity_state_to_sqlite() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("v3.db");
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                r#"
+                PRAGMA foreign_keys = ON;
+                CREATE TABLE gateway_profiles (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    api_root TEXT NOT NULL,
+                    token_ref TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                CREATE TABLE deleted_gateway_sources (
+                    source_hash TEXT PRIMARY KEY,
+                    deleted_at TEXT NOT NULL
+                );
+                CREATE TABLE gateway_source_identities (
+                    gateway_id TEXT NOT NULL,
+                    source_hash TEXT NOT NULL,
+                    PRIMARY KEY(gateway_id, source_hash),
+                    FOREIGN KEY(gateway_id) REFERENCES gateway_profiles(id) ON DELETE CASCADE
+                );
+                INSERT INTO gateway_profiles VALUES (
+                    'gateway', 'Gateway', 'https://api.example.com/v1', 'legacy-token-ref',
+                    '2026-08-20T00:00:00Z', '2026-08-20T00:00:00Z'
+                );
+                INSERT INTO gateway_source_identities VALUES ('gateway', 'legacy-source');
+                INSERT INTO deleted_gateway_sources VALUES (
+                    'legacy-tombstone', '2026-08-20T00:00:00Z'
+                );
+                PRAGMA user_version = 3;
+                "#,
+            )
+            .unwrap();
+        drop(connection);
+
+        let store = Store::open(&path).unwrap();
+        let connection = store.connection().unwrap();
+        let credential_table_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'gateway_credentials')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let source_identity_key: String = connection
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = ?1",
+                [SOURCE_IDENTITY_KEY_SETTING],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let source_history_count: i64 = connection
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM gateway_source_identities)
+                     + (SELECT COUNT(*) FROM deleted_gateway_sources)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let credential_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM gateway_credentials", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        drop(connection);
+
+        assert!(credential_table_exists);
+        assert_eq!(source_identity_key.len(), 64);
+        assert_eq!(source_history_count, 0);
+        assert_eq!(credential_count, 0);
+        assert!(store.optional_gateway_token("gateway").unwrap().is_none());
+    }
+
+    #[test]
+    fn import_failure_rolls_back_gateway_profile_and_credential() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("everybuddy.db")).unwrap();
+        let profile = GatewayProfile {
+            id: "gateway".to_string(),
+            name: "Gateway".to_string(),
+            api_root: "https://api.example.com/v1".to_string(),
+            created_at: "2026-08-20T00:00:00Z".to_string(),
+            updated_at: "2026-08-20T00:00:00Z".to_string(),
+        };
+        let invalid_model = ManagedModel {
+            key: "missing-gateway::model".to_string(),
+            gateway_id: "missing-gateway".to_string(),
+            id: "model".to_string(),
+            name: "Model".to_string(),
+            vendor: "custom".to_string(),
+            capabilities: CapabilitySet::default(),
+            configuration: Default::default(),
+            evidence: Vec::new(),
+            metadata: json!({"id": "model"}),
+            updated_at: "2026-08-20T00:00:00Z".to_string(),
+        };
+
+        let error = store
+            .import_missing_serialized(|_, _, _, _| {
+                Ok::<_, CoreError>((
+                    (),
+                    vec![(
+                        profile,
+                        "secret-token".to_string(),
+                        "source-hash".to_string(),
+                    )],
+                    Vec::new(),
+                    Vec::new(),
+                    vec![invalid_model],
+                ))
+            })
+            .unwrap_err();
+
+        assert!(matches!(error, CoreError::Storage(_)));
+        assert!(store.find_gateway("gateway").unwrap().is_none());
+        assert!(store.optional_gateway_token("gateway").unwrap().is_none());
+        assert!(store.list_models().unwrap().is_empty());
+        assert!(!store.has_gateway_source_history().unwrap());
     }
 
     #[test]

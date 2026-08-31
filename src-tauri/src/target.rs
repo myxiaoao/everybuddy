@@ -9,16 +9,20 @@ pub const MAX_TARGET_CONFIG_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TARGET_MODELS: usize = 10_000;
 
 use atomicwrites::{AtomicFile, OverwriteBehavior};
-use serde_json::{json, Map, Value};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
-use url::Url;
+
+#[cfg(test)]
+use serde_json::json;
 
 use crate::{
     error::{CoreError, CoreResult},
-    gateway::{normalize_api_root, normalize_request_url},
-    models::{GatewayProfile, ManagedModel, TargetKind, TargetSchema, TargetStatus},
+    models::{TargetKind, TargetSchema, TargetStatus},
     store::Store,
 };
+
+#[cfg(test)]
+use crate::models::{GatewayProfile, ManagedModel};
 
 pub trait TargetAdapter: Send + Sync {
     fn kind(&self) -> TargetKind;
@@ -74,21 +78,27 @@ pub fn target_path(kind: TargetKind, paths: &HashMap<TargetKind, String>) -> Cor
     expand_home(raw)
 }
 
-pub fn target_statuses(
+#[derive(Debug, Clone)]
+pub struct TargetInspection {
+    pub status: TargetStatus,
+    pub document: Option<ConfigDocument>,
+}
+
+pub fn target_inspections(
     store: &Store,
     paths: &HashMap<TargetKind, String>,
-) -> CoreResult<Vec<TargetStatus>> {
+) -> CoreResult<Vec<TargetInspection>> {
     adapters()
         .into_iter()
         .map(|adapter| {
             let kind = adapter.kind();
             let path = target_path(kind, paths)?;
-            target_status(store, kind, &path)
+            target_inspection(store, kind, &path)
         })
         .collect()
 }
 
-fn target_status(store: &Store, kind: TargetKind, path: &Path) -> CoreResult<TargetStatus> {
+fn target_inspection(store: &Store, kind: TargetKind, path: &Path) -> CoreResult<TargetInspection> {
     let parent_exists = path.parent().is_some_and(Path::exists);
     let file_exists = path.exists();
     let installed = fs::symlink_metadata(path).is_ok() || parent_exists;
@@ -96,6 +106,7 @@ fn target_status(store: &Store, kind: TargetKind, path: &Path) -> CoreResult<Tar
     let writable = write_path.as_deref().is_ok_and(is_writable);
     let mut schema = TargetSchema::Missing;
     let mut fingerprint_value = None;
+    let mut document = None;
     let mut error = write_path.err().map(|error| error.to_string());
 
     if file_exists {
@@ -103,7 +114,10 @@ fn target_status(store: &Store, kind: TargetKind, path: &Path) -> CoreResult<Tar
             Ok(bytes) => {
                 fingerprint_value = Some(fingerprint(&bytes));
                 match ConfigDocument::parse(&bytes) {
-                    Ok(document) => schema = document.schema(),
+                    Ok(parsed) => {
+                        schema = parsed.schema();
+                        document = Some(parsed);
+                    }
                     Err(parse_error) => {
                         schema = TargetSchema::Invalid;
                         error = Some(parse_error.to_string());
@@ -121,17 +135,20 @@ fn target_status(store: &Store, kind: TargetKind, path: &Path) -> CoreResult<Tar
         .target_last_published_hash(kind)?
         .is_some_and(|published| fingerprint_value.as_deref() != Some(published.as_str()));
 
-    Ok(TargetStatus {
-        kind,
-        display_name: kind.display_name().to_string(),
-        path: path.to_string_lossy().to_string(),
-        installed,
-        file_exists,
-        writable,
-        schema,
-        fingerprint: fingerprint_value,
-        drifted,
-        error,
+    Ok(TargetInspection {
+        status: TargetStatus {
+            kind,
+            display_name: kind.display_name().to_string(),
+            path: path.to_string_lossy().to_string(),
+            installed,
+            file_exists,
+            writable,
+            schema,
+            fingerprint: fingerprint_value,
+            drifted,
+            error,
+        },
+        document,
     })
 }
 
@@ -235,7 +252,7 @@ impl ConfigDocument {
                 .iter()
                 .position(|model| model.get("id").and_then(Value::as_str) == Some(id))
             {
-                let merged = merge_known_fields(&models[index], new_model);
+                let merged = crate::target_codec::merge_known_fields(&models[index], new_model);
                 if models[index] == merged {
                     summary.unchanged_count += 1;
                 } else {
@@ -257,7 +274,7 @@ impl ConfigDocument {
             .collect();
         let managed_identities: HashMap<_, _> = managed
             .iter()
-            .filter_map(model_identity)
+            .filter_map(crate::target_codec::model_identity)
             .map(|identity| (identity.key.clone(), identity))
             .collect();
         let mut remove_count = 0;
@@ -277,7 +294,7 @@ impl ConfigDocument {
                 .and_then(Value::as_str)
                 .is_some_and(|id| selected_ids.contains(id));
             let should_remove = !is_selected
-                && model_identity(model).is_some_and(|identity| {
+                && crate::target_codec::model_identity(model).is_some_and(|identity| {
                     managed_identities
                         .get(&identity.key)
                         .is_some_and(|managed| identity.belongs_to(managed))
@@ -293,7 +310,7 @@ impl ConfigDocument {
         summary
     }
 
-    pub fn collisions(&self, ids: &HashSet<&str>) -> Vec<(String, String)> {
+    pub fn collisions(&self, ids: &HashSet<String>) -> Vec<(String, String)> {
         self.models()
             .iter()
             .filter_map(|model| {
@@ -347,152 +364,14 @@ pub struct MergeSummary {
     pub remove_count: usize,
 }
 
-#[derive(Clone, Hash, PartialEq, Eq)]
-struct ModelIdentityKey {
-    id: String,
-    api_key: String,
-}
-
-struct ModelIdentity {
-    key: ModelIdentityKey,
-    url: String,
-    use_custom_protocol: bool,
-}
-
-impl ModelIdentity {
-    fn belongs_to(&self, managed: &Self) -> bool {
-        if self.url == managed.url && self.use_custom_protocol == managed.use_custom_protocol {
-            return true;
-        }
-        if self.use_custom_protocol == managed.use_custom_protocol {
-            return false;
-        }
-
-        let (standard, custom) = if self.use_custom_protocol {
-            (managed, self)
-        } else {
-            (self, managed)
-        };
-        let (Ok(standard_url), Ok(custom_url)) =
-            (Url::parse(&standard.url), Url::parse(&custom.url))
-        else {
-            return false;
-        };
-        if standard_url.origin() != custom_url.origin() {
-            return false;
-        }
-        custom_url
-            .path()
-            .strip_prefix(standard_url.path())
-            .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with('/'))
-    }
-}
-
-fn model_identity(model: &Value) -> Option<ModelIdentity> {
-    let id = model.get("id")?.as_str()?.trim();
-    let raw_url = model.get("url")?.as_str()?.trim();
-    let api_key = model.get("apiKey")?.as_str()?.trim();
-    if id.is_empty() || raw_url.is_empty() || api_key.is_empty() {
-        return None;
-    }
-    let use_custom_protocol = model
-        .get("useCustomProtocol")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let url = if use_custom_protocol {
-        normalize_request_url(raw_url)
-    } else {
-        normalize_api_root(raw_url)
-    }
-    .ok()?;
-
-    Some(ModelIdentity {
-        key: ModelIdentityKey {
-            id: id.to_string(),
-            api_key: api_key.to_string(),
-        },
-        url,
-        use_custom_protocol,
-    })
-}
-
+#[cfg(test)]
 pub fn model_config(model: &ManagedModel, gateway: &GatewayProfile, token: &str) -> Value {
-    let mut object = Map::new();
-    object.insert("id".to_string(), json!(model.id));
-    object.insert(
-        "name".to_string(),
-        json!(prefixed_model_name(&gateway.name, &model.name)),
-    );
-    object.insert("vendor".to_string(), json!(model.vendor));
-    object.insert(
-        "url".to_string(),
-        json!(model
-            .configuration
-            .endpoint_override
-            .as_deref()
-            .unwrap_or(&gateway.api_root)),
-    );
-    object.insert("apiKey".to_string(), json!(token));
-    if let Some(value) = model.configuration.max_input_tokens {
-        object.insert("maxInputTokens".to_string(), json!(value));
-    }
-    if let Some(value) = model.configuration.max_output_tokens {
-        object.insert("maxOutputTokens".to_string(), json!(value));
-    }
-    if let Some(value) = model.configuration.temperature {
-        object.insert("temperature".to_string(), json!(value));
-    }
-    object.insert(
-        "supportsToolCall".to_string(),
-        json!(model.capabilities.supports_tool_call),
-    );
-    object.insert(
-        "supportsImages".to_string(),
-        json!(model.capabilities.supports_images),
-    );
-    object.insert(
-        "supportsReasoning".to_string(),
-        json!(model.capabilities.supports_reasoning),
-    );
-    object.insert(
-        "onlyReasoning".to_string(),
-        json!(model.capabilities.supports_reasoning && model.configuration.only_reasoning),
-    );
-    object.insert(
-        "useCustomProtocol".to_string(),
-        json!(model.configuration.use_custom_protocol),
-    );
-    if model.capabilities.supports_reasoning {
-        let mut reasoning = Map::new();
-        if let Some(value) = model.configuration.reasoning.effort {
-            reasoning.insert("effort".to_string(), json!(value));
-        }
-        if let Some(value) = model.configuration.reasoning.default_effort {
-            reasoning.insert("defaultEffort".to_string(), json!(value));
-        }
-        reasoning.insert(
-            "supportedEfforts".to_string(),
-            json!(model.configuration.reasoning.supported_efforts),
-        );
-        if let Some(value) = model.configuration.reasoning.summary {
-            reasoning.insert("summary".to_string(), json!(value));
-        }
-        reasoning.insert(
-            "canDisableThinking".to_string(),
-            json!(model.configuration.reasoning.can_disable_thinking),
-        );
-        object.insert("reasoning".to_string(), Value::Object(reasoning));
-    }
-    Value::Object(object)
+    crate::target_codec::encode_model(model, gateway, token)
 }
 
+#[cfg(test)]
 fn prefixed_model_name(gateway_name: &str, model_name: &str) -> String {
-    let prefix = format!("{gateway_name} · ");
-    if model_name.starts_with(&prefix) {
-        model_name.to_string()
-    } else {
-        format!("{prefix}{model_name}")
-    }
+    crate::target_codec::prefixed_model_name(gateway_name, model_name)
 }
 
 pub fn fingerprint(bytes: &[u8]) -> String {
@@ -508,15 +387,30 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> CoreResult<()> {
         CoreError::Target(format!("Could not create {}: {error}", parent.display()))
     })?;
 
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+
     AtomicFile::new(&write_path, OverwriteBehavior::AllowOverwrite)
-        .write(|file| {
-            file.write_all(bytes)?;
-            file.sync_all()
-        })
+        .write_with_options(
+            |file| -> std::io::Result<()> {
+                file.write_all(bytes)?;
+                file.sync_all()?;
+                Ok(())
+            },
+            options,
+        )
         .map_err(|error| {
             CoreError::Target(format!("Could not write {}: {error}", path.display()))
         })?;
-    secure_permissions(&write_path)?;
+    #[cfg(windows)]
+    crate::file_permissions::secure_path(&write_path).map_err(|error| {
+        CoreError::Target(format!("Could not secure {}: {error}", path.display()))
+    })?;
     Ok(())
 }
 
@@ -569,167 +463,9 @@ fn resolve_missing_path(path: &Path) -> CoreResult<PathBuf> {
     Ok(resolved)
 }
 
-pub fn secure_permissions(path: &Path) -> CoreResult<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|error| {
-            CoreError::Target(format!("Could not secure {}: {error}", path.display()))
-        })?;
-    }
-
-    #[cfg(windows)]
-    secure_windows_permissions(path)?;
-
-    Ok(())
-}
-
-#[cfg(windows)]
-fn secure_windows_permissions(path: &Path) -> CoreResult<()> {
-    use std::{ffi::c_void, mem::size_of, os::windows::ffi::OsStrExt, ptr};
-
-    use windows_sys::Win32::{
-        Foundation::{CloseHandle, GENERIC_ALL, HANDLE},
-        Security::{
-            AddAccessAllowedAce,
-            Authorization::{SetNamedSecurityInfoW, SE_FILE_OBJECT},
-            GetLengthSid, GetTokenInformation, InitializeAcl, TokenUser, ACCESS_ALLOWED_ACE, ACL,
-            ACL_REVISION, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
-            TOKEN_QUERY, TOKEN_USER,
-        },
-        System::Threading::{GetCurrentProcess, OpenProcessToken},
-    };
-
-    let mut token: HANDLE = ptr::null_mut();
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
-        return Err(windows_permission_error(path, None));
-    }
-
-    let result = (|| {
-        let mut token_info_size = 0;
-        unsafe { GetTokenInformation(token, TokenUser, ptr::null_mut(), 0, &mut token_info_size) };
-        if token_info_size == 0 {
-            return Err(windows_permission_error(path, None));
-        }
-
-        // usize storage keeps the buffer aligned for TOKEN_USER.
-        let mut token_info = vec![0usize; (token_info_size as usize).div_ceil(size_of::<usize>())];
-        if unsafe {
-            GetTokenInformation(
-                token,
-                TokenUser,
-                token_info.as_mut_ptr().cast::<c_void>(),
-                token_info_size,
-                &mut token_info_size,
-            )
-        } == 0
-        {
-            return Err(windows_permission_error(path, None));
-        }
-
-        let user = unsafe { &*token_info.as_ptr().cast::<TOKEN_USER>() };
-        let sid_length = unsafe { GetLengthSid(user.User.Sid) } as usize;
-        if sid_length == 0 {
-            return Err(windows_permission_error(path, None));
-        }
-
-        let acl_size =
-            size_of::<ACL>() + size_of::<ACCESS_ALLOWED_ACE>() + sid_length - size_of::<u32>();
-        let mut acl_storage = vec![0u32; acl_size.div_ceil(size_of::<u32>())];
-        let acl = acl_storage.as_mut_ptr().cast::<ACL>();
-        if unsafe { InitializeAcl(acl, acl_size as u32, ACL_REVISION) } == 0
-            || unsafe { AddAccessAllowedAce(acl, ACL_REVISION, GENERIC_ALL, user.User.Sid) } == 0
-        {
-            return Err(windows_permission_error(path, None));
-        }
-
-        let wide_path: Vec<u16> = path
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        let status = unsafe {
-            SetNamedSecurityInfoW(
-                wide_path.as_ptr(),
-                SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                ptr::null_mut(),
-                ptr::null_mut(),
-                acl,
-                ptr::null_mut(),
-            )
-        };
-        if status != 0 {
-            return Err(windows_permission_error(path, Some(status)));
-        }
-        Ok(())
-    })();
-
-    unsafe { CloseHandle(token) };
-    result
-}
-
-#[cfg(windows)]
-fn windows_permission_error(path: &Path, status: Option<u32>) -> CoreError {
-    let error = status
-        .map(|code| std::io::Error::from_raw_os_error(code as i32))
-        .unwrap_or_else(std::io::Error::last_os_error);
-    CoreError::Target(format!("Could not secure {}: {error}", path.display()))
-}
-
+#[cfg(test)]
 fn merge_known_fields(existing: &Value, incoming: &Value) -> Value {
-    let mut merged = existing.as_object().cloned().unwrap_or_default();
-    if let Some(fields) = incoming.as_object() {
-        for (key, value) in fields {
-            if key != "reasoning" {
-                merged.insert(key.clone(), value.clone());
-            }
-        }
-    }
-
-    for field in ["maxInputTokens", "maxOutputTokens", "temperature"] {
-        if incoming.get(field).is_none() {
-            merged.remove(field);
-        }
-    }
-
-    if let Some(incoming_reasoning) = incoming.get("reasoning").and_then(Value::as_object) {
-        let mut reasoning = merged
-            .get("reasoning")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        for field in ["effort", "defaultEffort", "summary"] {
-            if incoming_reasoning.get(field).is_none() {
-                reasoning.remove(field);
-            }
-        }
-        for (key, value) in incoming_reasoning {
-            reasoning.insert(key.clone(), value.clone());
-        }
-        merged.insert("reasoning".to_string(), Value::Object(reasoning));
-    } else {
-        let mut reasoning = merged
-            .get("reasoning")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        for field in [
-            "effort",
-            "defaultEffort",
-            "supportedEfforts",
-            "summary",
-            "canDisableThinking",
-        ] {
-            reasoning.remove(field);
-        }
-        if reasoning.is_empty() {
-            merged.remove("reasoning");
-        } else {
-            merged.insert("reasoning".to_string(), Value::Object(reasoning));
-        }
-    }
-    Value::Object(merged)
+    crate::target_codec::merge_known_fields(existing, incoming)
 }
 
 fn home_config_path(directory: &str) -> CoreResult<PathBuf> {
@@ -806,6 +542,24 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn atomic_write_commits_with_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("models.json");
+        fs::write(&path, b"[]\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        atomic_write(&path, b"[{\"id\":\"gpt-5\"}]\n").unwrap();
+
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn atomic_write_rejects_a_dangling_symlink() {
         use std::os::unix::fs::symlink;
 
@@ -832,7 +586,9 @@ mod tests {
         let link = directory.path().join("models.json");
         symlink(directory.path().join("missing.json"), &link).unwrap();
 
-        let status = target_status(&store, TargetKind::Workbuddy, &link).unwrap();
+        let status = target_inspection(&store, TargetKind::Workbuddy, &link)
+            .unwrap()
+            .status;
 
         assert!(status.installed);
         assert!(!status.file_exists);
@@ -936,7 +692,6 @@ mod tests {
             id: "gateway".to_string(),
             name: "Gateway".to_string(),
             api_root: "https://api.example.com/v1".to_string(),
-            token_ref: "gateway".to_string(),
             created_at: "2026-08-20T00:00:00Z".to_string(),
             updated_at: "2026-08-20T00:00:00Z".to_string(),
         };
@@ -1030,7 +785,7 @@ mod tests {
             ),
         ]);
 
-        assert!(target_statuses(&store, &paths).is_err());
+        assert!(target_inspections(&store, &paths).is_err());
     }
 
     #[test]

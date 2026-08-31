@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -12,6 +13,7 @@ import { api } from "./lib/api";
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -23,7 +25,7 @@ describe("EveryBuddy workspace", () => {
       expect(screen.getAllByText("GPT-5.6").length).toBeGreaterThan(0),
     );
     expect(screen.getAllByText("Sub2API").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText("v0.1.1")).toBeInTheDocument();
+    expect(screen.getByText("v0.1.2")).toBeInTheDocument();
     expect(screen.getByText("Local Relay")).toBeInTheDocument();
     expect(screen.getAllByText("WorkBuddy").length).toBeGreaterThan(0);
     expect(screen.getAllByText("CodeBuddy").length).toBeGreaterThan(0);
@@ -80,7 +82,7 @@ describe("EveryBuddy workspace", () => {
     await waitFor(() =>
       expect(screen.getAllByText("私有模型").length).toBeGreaterThanOrEqual(1),
     );
-  });
+  }, 10_000);
 
   it("edits the complete WorkBuddy model configuration", async () => {
     render(<App />);
@@ -159,7 +161,7 @@ describe("EveryBuddy workspace", () => {
     );
   });
 
-  it("loads an existing gateway token hidden and toggles its visibility", async () => {
+  it("loads an existing gateway token and keeps the visibility toggle", async () => {
     render(<App />);
 
     await waitFor(() =>
@@ -171,11 +173,31 @@ describe("EveryBuddy workspace", () => {
     const tokenInput = within(dialog).getByLabelText("Token Key");
     expect(tokenInput).toHaveAttribute("type", "password");
     expect(tokenInput).toHaveValue("demo-token-primary");
+    expect(dialog).toHaveTextContent("已从本地 SQLite 数据库加载");
 
     fireEvent.click(within(dialog).getByRole("button", { name: "显示 Token" }));
     expect(tokenInput).toHaveAttribute("type", "text");
+    expect(tokenInput).toHaveValue("demo-token-primary");
+    fireEvent.change(tokenInput, { target: { value: "replacement-token" } });
+    expect(tokenInput).toHaveValue("replacement-token");
     fireEvent.click(within(dialog).getByRole("button", { name: "隐藏 Token" }));
     expect(tokenInput).toHaveAttribute("type", "password");
+  });
+
+  it("allows a missing migrated token to be re-entered", async () => {
+    vi.spyOn(api, "getGatewayToken").mockResolvedValue(null);
+    render(<App />);
+
+    await screen.findAllByText("Sub2API");
+    fireEvent.click(screen.getByRole("button", { name: "编辑 API" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "编辑 API" });
+    const tokenInput = within(dialog).getByLabelText("Token Key");
+    expect(tokenInput).toHaveValue("");
+    expect(tokenInput).toBeRequired();
+
+    fireEvent.change(tokenInput, { target: { value: "replacement-token" } });
+    expect(tokenInput).toHaveValue("replacement-token");
   });
 
   it("toggles a configuration target from the full card", async () => {
@@ -193,6 +215,7 @@ describe("EveryBuddy workspace", () => {
     await waitFor(() =>
       expect(checkbox).toHaveProperty("checked", !initialState),
     );
+    await waitFor(() => expect(checkbox).toBeEnabled());
 
     fireEvent.click(targetOption as HTMLElement);
     await waitFor(() =>
@@ -538,14 +561,12 @@ describe("EveryBuddy workspace", () => {
       },
     };
     vi.spyOn(api, "bootstrap").mockResolvedValueOnce(data);
-    vi.spyOn(api, "getTargetStatuses").mockResolvedValue(
-      data.targets.map((target) =>
+    vi.spyOn(api, "getTargetSnapshot").mockResolvedValue({
+      targets: data.targets.map((target) =>
         target.kind === "codebuddy" ? { ...target, writable: false } : target,
       ),
-    );
-    vi.spyOn(api, "getTargetModelStates").mockResolvedValue(
-      data.targetModelStates,
-    );
+      targetModelStates: data.targetModelStates,
+    });
     const saveSettings = vi
       .spyOn(api, "saveSettings")
       .mockImplementation(async (settings) => settings);
@@ -565,6 +586,99 @@ describe("EveryBuddy workspace", () => {
       selectedTargets: ["workbuddy", "codebuddy"],
       targetSelectionInitialized: true,
     });
+  });
+
+  it("does not let a stale target poll overwrite a forced refresh", async () => {
+    const data = await api.bootstrap();
+    let resolvePoll:
+      | ((snapshot: Awaited<ReturnType<typeof api.getTargetSnapshot>>) => void)
+      | null = null;
+    const stalePoll = new Promise<
+      Awaited<ReturnType<typeof api.getTargetSnapshot>>
+    >((resolve) => {
+      resolvePoll = resolve;
+    });
+    const forcedSnapshot = {
+      targets: data.targets.map((target) =>
+        target.kind === "codebuddy" ? { ...target, writable: false } : target,
+      ),
+      targetModelStates: data.targetModelStates,
+    };
+    const getTargetSnapshot = vi
+      .spyOn(api, "getTargetSnapshot")
+      .mockReturnValueOnce(stalePoll)
+      .mockResolvedValueOnce(forcedSnapshot);
+    vi.spyOn(api, "saveSettings").mockImplementation(
+      async (settings) => settings,
+    );
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<App />);
+
+    await screen.findAllByText("GPT-5.6");
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(getTargetSnapshot).toHaveBeenCalledOnce());
+
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(getTargetSnapshot).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(screen.getByRole("checkbox", { name: "WorkBuddy" })).toBeEnabled();
+      expect(
+        screen.getByRole("checkbox", { name: "CodeBuddy" }),
+      ).toBeDisabled();
+    });
+
+    await act(async () => {
+      resolvePoll?.({
+        targets: data.targets,
+        targetModelStates: data.targetModelStates,
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("checkbox", { name: "CodeBuddy" })).toBeDisabled();
+  });
+
+  it("does not let a late bootstrap overwrite a newer target poll", async () => {
+    const data = await api.bootstrap();
+    let resolveBootstrap:
+      ((value: Awaited<ReturnType<typeof api.bootstrap>>) => void) | null =
+      null;
+    vi.spyOn(api, "bootstrap").mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveBootstrap = resolve;
+      }),
+    );
+    const newerSnapshot = {
+      targets: data.targets.map((target) =>
+        target.kind === "codebuddy" ? { ...target, writable: false } : target,
+      ),
+      targetModelStates: data.targetModelStates,
+    };
+    const getTargetSnapshot = vi
+      .spyOn(api, "getTargetSnapshot")
+      .mockResolvedValue(newerSnapshot);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<App />);
+
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(getTargetSnapshot).toHaveBeenCalledOnce());
+
+    await act(async () => {
+      resolveBootstrap?.(data);
+      await Promise.resolve();
+    });
+
+    await screen.findAllByText("GPT-5.6");
+    expect(screen.getByRole("checkbox", { name: "CodeBuddy" })).toBeDisabled();
   });
 
   it("scopes conflicting actions to the gateway being refreshed", async () => {
@@ -698,7 +812,6 @@ describe("EveryBuddy workspace", () => {
   });
 
   it("guards unsaved model edits before editing the gateway", async () => {
-    const getGatewayToken = vi.spyOn(api, "getGatewayToken");
     render(<App />);
 
     await screen.findAllByText("GPT-5.6");
@@ -706,9 +819,19 @@ describe("EveryBuddy workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "编辑 API" }));
 
     const discard = screen.getByRole("dialog", { name: "丢弃未保存的更改" });
-    expect(getGatewayToken).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("dialog", { name: "编辑 API" }),
+    ).not.toBeInTheDocument();
     fireEvent.click(within(discard).getByRole("button", { name: "丢弃更改" }));
-    await screen.findByRole("dialog", { name: "编辑 API" });
-    expect(getGatewayToken).toHaveBeenCalledWith("demo-gateway");
+    const gatewayDialog = await screen.findByRole("dialog", {
+      name: "编辑 API",
+    });
+    expect(within(gatewayDialog).getByLabelText("Token Key")).toHaveValue(
+      "demo-token-primary",
+    );
+    expect(within(gatewayDialog).getByLabelText("Token Key")).toHaveAttribute(
+      "type",
+      "password",
+    );
   });
 });

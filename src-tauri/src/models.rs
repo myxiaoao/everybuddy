@@ -12,7 +12,6 @@ pub struct GatewayProfile {
     pub id: String,
     pub name: String,
     pub api_root: String,
-    pub token_ref: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -23,7 +22,7 @@ pub struct GatewayInput {
     pub id: Option<String>,
     pub name: String,
     pub base_url: String,
-    pub token: String,
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -282,6 +281,13 @@ pub struct TargetModelState {
     pub matched_model_keys: Vec<String>,
     pub unmatched_count: usize,
     pub skipped_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetSnapshot {
+    pub targets: Vec<TargetStatus>,
+    pub target_model_states: Vec<TargetModelState>,
 }
 
 impl TargetModelState {

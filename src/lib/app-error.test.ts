@@ -47,4 +47,20 @@ describe("localizedError", () => {
       recovery: "检查必填项、模型选择和发布目标后重试。",
     });
   });
+
+  it("explains how to recover a missing SQLite credential", () => {
+    expect(
+      localizedError(
+        {
+          code: "CREDENTIAL_ERROR",
+          message: "The gateway token is missing from the local database",
+        },
+        t,
+      ),
+    ).toEqual({
+      title: "无法读取 Token",
+      message: "本地数据库中没有此 API 的 Token。",
+      recovery: "重新编辑并保存 API Token 后重试。",
+    });
+  });
 });

@@ -1,6 +1,6 @@
 [package]
 name = "everybuddy"
-version = "0.1.1"
+version = "0.1.2"
 description = "Manage OpenAI-compatible models for WorkBuddy and CodeBuddy"
 authors = ["EveryBuddy contributors"]
 edition = "2021"
@@ -30,7 +30,6 @@ chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 hex = "0.4"
 hmac = "0.13"
-keyring = { version = "3", features = ["apple-native", "windows-native"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.32", features = ["backup", "bundled"] }
 serde = { version = "1", features = ["derive"] }
@@ -52,5 +51,6 @@ windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_Security",
   "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
   "Win32_System_Threading",
 ] }

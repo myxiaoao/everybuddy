@@ -1,30 +1,29 @@
 mod capability;
 mod commands;
+mod conditional_write;
 mod error;
+mod file_permissions;
 mod gateway;
 mod gateway_service;
 mod market_catalog;
+mod model_lifecycle;
 mod models;
 mod publish;
 mod secrets;
 mod store;
 mod target;
+mod target_codec;
 mod target_import;
 
-use std::{
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::{path::PathBuf, sync::Mutex};
 
 use gateway::GatewayClient;
-use secrets::{SecretStore, SystemSecretStore};
 use store::Store;
 use tauri::Manager;
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
 
 pub struct AppState {
     store: Store,
-    secrets: Arc<dyn SecretStore>,
     gateway_client: GatewayClient,
     backup_root: PathBuf,
     app_mutation: Mutex<()>,
@@ -61,7 +60,6 @@ pub fn run() {
                     .map_err(|error| std::io::Error::other(error.to_string()))?;
             app.manage(AppState {
                 store,
-                secrets: Arc::new(SystemSecretStore),
                 gateway_client,
                 backup_root: data_dir.join("backups"),
                 app_mutation: Mutex::new(()),
@@ -70,8 +68,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
-            commands::save_gateway,
             commands::get_gateway_token,
+            commands::save_gateway,
             commands::delete_gateway,
             commands::discover_models,
             commands::add_manual_model,
@@ -79,8 +77,7 @@ pub fn run() {
             commands::get_openrouter_model_match,
             commands::apply_openrouter_model,
             commands::update_model,
-            commands::get_target_statuses,
-            commands::get_target_model_states,
+            commands::get_target_snapshot,
             commands::prepare_publish,
             commands::execute_publish,
             commands::list_backups,

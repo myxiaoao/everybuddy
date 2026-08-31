@@ -16,7 +16,7 @@ pub enum CoreError {
     #[error("{0}")]
     Storage(String),
     #[error("{0}")]
-    SecretStore(String),
+    Credential(String),
     #[error("{0}")]
     Target(String),
     #[error("{0}")]
@@ -33,7 +33,7 @@ impl CoreError {
             Self::Network(_) => "NETWORK_ERROR",
             Self::Protocol(_) => "PROTOCOL_ERROR",
             Self::Storage(_) => "STORAGE_ERROR",
-            Self::SecretStore(_) => "SECRET_STORE_ERROR",
+            Self::Credential(_) => "CREDENTIAL_ERROR",
             Self::Target(_) => "TARGET_ERROR",
             Self::Conflict(_) => "CONFLICT_ERROR",
             Self::Drift(_) => "DRIFT_ERROR",

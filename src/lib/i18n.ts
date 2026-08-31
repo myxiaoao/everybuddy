@@ -11,7 +11,10 @@ const messages = {
     gatewayName: "名称",
     gatewayUrl: "API Base URL",
     gatewayToken: "Token Key",
-    gatewayTokenHint: "Token 只保存在系统凭据库中，默认隐藏。",
+    gatewayTokenHint:
+      "Token 保存在 EveryBuddy 的本地 SQLite 数据库中，默认隐藏。",
+    gatewayTokenEditHint:
+      "Token 已从本地 SQLite 数据库加载，默认隐藏；修改后保存会替换原 Token。",
     showToken: "显示 Token",
     hideToken: "隐藏 Token",
     saveAndDiscover: "保存并发现模型",
@@ -155,7 +158,7 @@ const messages = {
     conflicts: "模型 ID 冲突",
     acceptConflicts: "我确认使用当前 API 来源替换这些模型",
     confirmPublish: "发布到 {count} 个目标",
-    published: "模型配置已发布",
+    published: "模型配置已写入",
     importSucceeded: "已从目标配置导入 {gateways} 个 API 和 {models} 个模型。",
     importAnnouncement:
       "启动配置恢复完成：导入 {gateways} 个 API、{models} 个模型，发现 {issues} 个需要关注的配置项。",
@@ -174,15 +177,13 @@ const messages = {
     importIssueCustomProtocol: "自定义协议不支持自动导入。",
     importIssueAmbiguousModel: "存在多个匹配的本地模型，无法确定来源。",
     importIssueAmbiguousGateway: "存在多个候选 API，无法安全匹配凭据。",
-    importIssueCredentialImportFailed: "Token 无法保存到系统凭据库。",
-    importIssueCredentialUnavailable:
-      "系统凭据库暂时不可用，未自动匹配此 API。",
     importIssueTargetConflict:
       "与 WorkBuddy 参数不一致，已保留 WorkBuddy 导入结果。",
     importIssueModelConflict: "本地同名模型使用了不同的接口地址。",
     importIssueUnknown: "此配置项未自动导入。",
     publishFailed: "发布未完成，请检查逐目标结果。",
-    publishResultSuccess: "已写入并校验配置。",
+    publishResultSuccess:
+      "已写入并校验配置；目标应用可能需要重新加载或重启后生效。",
     publishResultFailure: "写入失败，请检查目标路径和权限后重试。",
     publishResultRolledBack: "其他目标发布失败，已恢复发布前配置。",
     publishResultRollbackFailed: "发布和回滚均失败，请立即检查目标配置文件。",
@@ -244,9 +245,9 @@ const messages = {
     errorConflictTitle: "存在模型冲突",
     errorConflictMessage: "目标中已有相同 Model ID 的配置。",
     errorConflictRecovery: "返回发布预览，确认每个冲突后再发布。",
-    errorSecretTitle: "无法读取 Token",
-    errorSecretMessage: "系统凭据库未返回此 API 的 Token。",
-    errorSecretRecovery: "重新编辑并保存 API Token 后重试。",
+    errorCredentialTitle: "无法读取 Token",
+    errorCredentialMessage: "本地数据库中没有此 API 的 Token。",
+    errorCredentialRecovery: "重新编辑并保存 API Token 后重试。",
     errorStorageTitle: "本地存储不可用",
     errorStorageMessage: "EveryBuddy 无法读写本地数据。",
     errorStorageRecovery: "检查磁盘空间和当前用户权限后重试。",
@@ -303,7 +304,9 @@ const messages = {
     gatewayUrl: "API Base URL",
     gatewayToken: "Token key",
     gatewayTokenHint:
-      "The token stays in your system credential store and is hidden by default.",
+      "The token stays in EveryBuddy's local SQLite database and is hidden by default.",
+    gatewayTokenEditHint:
+      "The token was loaded from the local SQLite database and is hidden by default. Saving a change replaces it.",
     showToken: "Show token",
     hideToken: "Hide token",
     saveAndDiscover: "Save and discover",
@@ -458,7 +461,7 @@ const messages = {
     acceptConflicts:
       "I confirm replacing these models with the current API source",
     confirmPublish: "Publish to {count} targets",
-    published: "Model configuration published",
+    published: "Model configuration written",
     importSucceeded:
       "Imported {gateways} APIs and {models} models from target configuration.",
     importAnnouncement:
@@ -483,10 +486,6 @@ const messages = {
       "Multiple local models match, so the source is ambiguous.",
     importIssueAmbiguousGateway:
       "Multiple API candidates exist, so the credential cannot be matched safely.",
-    importIssueCredentialImportFailed:
-      "The token could not be saved to the system credential store.",
-    importIssueCredentialUnavailable:
-      "The system credential store is unavailable, so this API was not matched automatically.",
     importIssueTargetConflict:
       "Parameters differ from WorkBuddy, so the WorkBuddy import was kept.",
     importIssueModelConflict:
@@ -494,7 +493,8 @@ const messages = {
     importIssueUnknown:
       "This configuration item was not imported automatically.",
     publishFailed: "Publishing did not complete. Review each target result.",
-    publishResultSuccess: "Configuration written and verified.",
+    publishResultSuccess:
+      "Configuration written and verified. The target app may need to reload or restart before it takes effect.",
     publishResultFailure:
       "Writing failed. Check the target path and permissions, then try again.",
     publishResultRolledBack:
@@ -569,10 +569,10 @@ const messages = {
       "The target already contains a configuration with the same Model ID.",
     errorConflictRecovery:
       "Return to the publish preview and confirm each conflict before publishing.",
-    errorSecretTitle: "Token unavailable",
-    errorSecretMessage:
-      "The system credential store did not return this API token.",
-    errorSecretRecovery: "Edit the API, save the token again, and retry.",
+    errorCredentialTitle: "Token unavailable",
+    errorCredentialMessage:
+      "The local database does not contain this API token.",
+    errorCredentialRecovery: "Edit the API, save the token again, and retry.",
     errorStorageTitle: "Local storage unavailable",
     errorStorageMessage: "EveryBuddy could not read or write local data.",
     errorStorageRecovery:

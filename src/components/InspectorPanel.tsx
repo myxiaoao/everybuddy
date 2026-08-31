@@ -349,7 +349,7 @@ export function InspectorPanel({
                       type="checkbox"
                       checked={selectedTargets.includes(target.kind)}
                       onChange={() => onToggleTarget(target.kind)}
-                      disabled={invalid}
+                      disabled={busy || invalid}
                       aria-label={target.displayName}
                     />
                     <span

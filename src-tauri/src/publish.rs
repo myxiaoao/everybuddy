@@ -2,33 +2,35 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use chrono::Utc;
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
     capability::{has_unverified_market_match, supports_chat_configuration},
+    conditional_write::{replace_exact, rollback_exact},
     error::{CoreError, CoreResult},
-    gateway_service::{gateway_source_hash, source_identity_key},
+    gateway_service::gateway_source_hash,
     models::{
-        BackupRecord, ExecutePublishRequest, ModelConflict, ModelRevision, PreparePublishRequest,
-        PublishPreview, PublishResult, TargetKind, TargetPreview, TargetPublishResult,
+        BackupRecord, ExecutePublishRequest, GatewayProfile, ManagedModel, ModelConflict,
+        ModelRevision, PreparePublishRequest, PublishPreview, PublishResult, TargetKind,
+        TargetPreview, TargetPublishResult,
     },
-    secrets::SecretStore,
     store::{Store, TargetStateUpdate},
     target::{
-        atomic_write, fingerprint, model_config, read_target_file, target_path, target_write_path,
-        ConfigDocument,
+        atomic_write, fingerprint, read_target_file, target_path, target_write_path, ConfigDocument,
     },
+    target_codec::encode_model as model_config,
 };
 
 const BACKUP_RETENTION: usize = 10;
+const MAX_PUBLISH_MODELS: usize = 10_000;
+const MAX_PUBLISH_IDENTIFIER_BYTES: usize = 512;
 
 pub struct PublishCoordinator<'a> {
     pub store: &'a Store,
-    pub secrets: Arc<dyn SecretStore>,
     pub backup_root: &'a Path,
 }
 
@@ -38,28 +40,8 @@ impl PublishCoordinator<'_> {
         request: &PreparePublishRequest,
         target_paths: &HashMap<TargetKind, String>,
     ) -> CoreResult<PublishPreview> {
-        validate_request(&request.model_ids, &request.targets)?;
-        let gateway = self.store.gateway(&request.gateway_id)?;
-        let models = self
-            .store
-            .selected_models(&request.gateway_id, &request.model_ids)?;
-        let managed_models = self.store.models_for_gateway(&request.gateway_id)?;
-        validate_model_configurations(&models)?;
-        let token = self.secrets.get(&gateway.token_ref)?;
-        let identity_key = source_identity_key(
-            self.secrets.as_ref(),
-            self.store.has_gateway_source_history()?,
-        )?;
-        let credential_revision = gateway_source_hash(&identity_key, &gateway.api_root, &token);
-        let incoming: Vec<_> = models
-            .iter()
-            .map(|model| model_config(model, &gateway, &token))
-            .collect();
-        let managed: Vec<_> = managed_models
-            .iter()
-            .map(|model| model_config(model, &gateway, &token))
-            .collect();
-        let selected_ids: HashSet<_> = request.model_ids.iter().map(String::as_str).collect();
+        validate_request(&request.gateway_id, &request.model_ids, &request.targets)?;
+        let snapshot = PublishSnapshot::load(self, &request.gateway_id, &request.model_ids)?;
         let mut targets = Vec::new();
         let mut conflicts = Vec::new();
 
@@ -67,14 +49,14 @@ impl PublishCoordinator<'_> {
             let path = target_path(*kind, target_paths)?;
             let write_path = target_write_path(&path)?;
             let (mut document, original) = ConfigDocument::read(&write_path)?;
-            conflicts.extend(document.collisions(&selected_ids).into_iter().map(
+            conflicts.extend(document.collisions(&snapshot.selected_ids).into_iter().map(
                 |(model_id, existing_name)| ModelConflict {
                     target: *kind,
                     model_id,
                     existing_name,
                 },
             ));
-            let summary = document.sync(&incoming, &managed);
+            let summary = document.sync(&snapshot.incoming, &snapshot.managed);
             targets.push(TargetPreview {
                 target: *kind,
                 path: path.to_string_lossy().to_string(),
@@ -94,9 +76,9 @@ impl PublishCoordinator<'_> {
                 "WorkBuddy and CodeBuddy require the API token in their local models.json file."
                     .to_string(),
             ],
-            gateway_revision: gateway.updated_at,
-            credential_revision,
-            model_revisions: model_revisions(&managed_models),
+            gateway_revision: snapshot.gateway.updated_at,
+            credential_revision: snapshot.credential_revision,
+            model_revisions: model_revisions(&snapshot.managed_models),
         })
     }
 
@@ -105,48 +87,15 @@ impl PublishCoordinator<'_> {
         request: &ExecutePublishRequest,
         target_paths: &HashMap<TargetKind, String>,
     ) -> CoreResult<PublishResult> {
-        validate_request(&request.model_ids, &request.targets)?;
-        let gateway = self.store.gateway(&request.gateway_id)?;
-        let models = self
-            .store
-            .selected_models(&request.gateway_id, &request.model_ids)?;
-        let managed_models = self.store.models_for_gateway(&request.gateway_id)?;
-        validate_model_configurations(&models)?;
-        let token = self.secrets.get(&gateway.token_ref)?;
-        let identity_key = source_identity_key(
-            self.secrets.as_ref(),
-            self.store.has_gateway_source_history()?,
-        )?;
-        let credential_revision = gateway_source_hash(&identity_key, &gateway.api_root, &token);
+        validate_request(&request.gateway_id, &request.model_ids, &request.targets)?;
+        let snapshot = PublishSnapshot::load(self, &request.gateway_id, &request.model_ids)?;
         validate_resource_revisions(
             request,
-            &gateway.updated_at,
-            &credential_revision,
-            &managed_models,
+            &snapshot.gateway.updated_at,
+            &snapshot.credential_revision,
+            &snapshot.managed_models,
         )?;
-        let mut source_hashes: Vec<_> = models
-            .iter()
-            .map(|model| {
-                let api_root = model
-                    .configuration
-                    .endpoint_override
-                    .as_deref()
-                    .unwrap_or(&gateway.api_root);
-                gateway_source_hash(&identity_key, api_root, &token)
-            })
-            .collect();
-        source_hashes.push(credential_revision.clone());
-        source_hashes.sort_unstable();
-        source_hashes.dedup();
-        let incoming: Vec<_> = models
-            .iter()
-            .map(|model| model_config(model, &gateway, &token))
-            .collect();
-        let managed: Vec<_> = managed_models
-            .iter()
-            .map(|model| model_config(model, &gateway, &token))
-            .collect();
-        let selected_ids: HashSet<_> = request.model_ids.iter().map(String::as_str).collect();
+        let source_hashes = snapshot.source_hashes();
         let expectation_map: HashMap<_, _> = request
             .expectations
             .iter()
@@ -191,13 +140,13 @@ impl PublishCoordinator<'_> {
                     kind.display_name()
                 )));
             }
-            let collisions = document.collisions(&selected_ids);
+            let collisions = document.collisions(&snapshot.selected_ids);
             if !collisions.is_empty() && !request.accept_conflicts {
                 return Err(CoreError::Conflict(
                     "Confirm model replacements before publishing".to_string(),
                 ));
             }
-            document.sync(&incoming, &managed);
+            document.sync(&snapshot.incoming, &snapshot.managed);
             prepared.push(PreparedTarget {
                 kind: *kind,
                 configured_path: path,
@@ -207,9 +156,12 @@ impl PublishCoordinator<'_> {
             });
         }
 
-        let current_token = self.secrets.get(&gateway.token_ref)?;
-        let current_credential_revision =
-            gateway_source_hash(&identity_key, &gateway.api_root, &current_token);
+        let current_token = self.store.gateway_token(&snapshot.gateway.id)?;
+        let current_credential_revision = gateway_source_hash(
+            &snapshot.identity_key,
+            &snapshot.gateway.api_root,
+            &current_token,
+        );
         if current_credential_revision != request.credential_revision {
             return Err(CoreError::Conflict(
                 "The API credential changed after preview; create a new preview".to_string(),
@@ -223,31 +175,36 @@ impl PublishCoordinator<'_> {
         }
 
         let mut committed: Vec<&PreparedTarget> = Vec::new();
+        let mut verified_hashes = HashMap::new();
         let mut results = Vec::new();
         for target in &prepared {
-            if let Err(error) = write_and_verify(target, &selected_ids) {
-                let rollback =
-                    (!matches!(error, CoreError::Drift(_))).then(|| rollback_target(target));
-                results.push(TargetPublishResult {
-                    target: target.kind,
-                    success: false,
-                    rollback_attempted: rollback.is_some(),
-                    rolled_back: rollback.as_ref().is_some_and(Result::is_ok),
-                    message: match rollback {
-                        Some(Ok(())) => format!("{error}; changes were rolled back"),
-                        Some(Err(rollback_error)) => {
-                            format!("{error}; rollback failed: {rollback_error}")
-                        }
-                        None => error.to_string(),
-                    },
-                });
-                rollback_committed(&committed, &mut results, "a target write failed");
-                return Ok(PublishResult {
-                    success: false,
-                    results,
-                });
-            }
+            let verified = match write_and_verify(target) {
+                Ok(verified) => verified,
+                Err(error) => {
+                    let rollback =
+                        (!matches!(error, CoreError::Drift(_))).then(|| rollback_target(target));
+                    results.push(TargetPublishResult {
+                        target: target.kind,
+                        success: false,
+                        rollback_attempted: rollback.is_some(),
+                        rolled_back: rollback.as_ref().is_some_and(Result::is_ok),
+                        message: match rollback {
+                            Some(Ok(())) => format!("{error}; changes were rolled back"),
+                            Some(Err(rollback_error)) => {
+                                format!("{error}; rollback failed: {rollback_error}")
+                            }
+                            None => error.to_string(),
+                        },
+                    });
+                    rollback_committed(&committed, &mut results, "a target write failed");
+                    return Ok(PublishResult {
+                        success: false,
+                        results,
+                    });
+                }
+            };
             committed.push(target);
+            verified_hashes.insert(target.kind, verified);
             results.push(TargetPublishResult {
                 target: target.kind,
                 success: true,
@@ -260,7 +217,10 @@ impl PublishCoordinator<'_> {
         let state_updates: Vec<_> = prepared
             .iter()
             .map(|target| {
-                let hash = fingerprint(&target.output);
+                let hash = verified_hashes
+                    .get(&target.kind)
+                    .expect("every committed target has a verified hash")
+                    .clone();
                 TargetStateUpdate {
                     target: target.kind,
                     path: target.configured_path.to_string_lossy().to_string(),
@@ -272,7 +232,7 @@ impl PublishCoordinator<'_> {
             .collect();
         if self
             .store
-            .save_publish_state(&gateway.id, &source_hashes, &state_updates)
+            .save_publish_state(&snapshot.gateway.id, &source_hashes, &state_updates)
             .is_err()
         {
             rollback_committed(
@@ -310,8 +270,13 @@ impl PublishCoordinator<'_> {
         if let Some(current) = original.as_deref() {
             self.create_backup(backup.target, &source_path, current)?;
         }
-        atomic_write(&source_path, &bytes)?;
-        let hash = fingerprint(&bytes);
+        let verified = replace_exact(
+            &source_path,
+            original.as_deref(),
+            &bytes,
+            backup.target.display_name(),
+        )?;
+        let hash = verified.fingerprint;
         if let Err(error) = self.store.save_target_state(
             backup.target,
             &backup.source_path,
@@ -432,7 +397,82 @@ struct PreparedTarget {
     output: Vec<u8>,
 }
 
-fn validate_request(model_ids: &[String], targets: &[TargetKind]) -> CoreResult<()> {
+struct PublishSnapshot {
+    gateway: GatewayProfile,
+    selected_models: Vec<ManagedModel>,
+    managed_models: Vec<ManagedModel>,
+    identity_key: String,
+    token: String,
+    credential_revision: String,
+    incoming: Vec<Value>,
+    managed: Vec<Value>,
+    selected_ids: HashSet<String>,
+}
+
+impl PublishSnapshot {
+    fn load(
+        coordinator: &PublishCoordinator<'_>,
+        gateway_id: &str,
+        model_ids: &[String],
+    ) -> CoreResult<Self> {
+        let (gateway, token) = coordinator.store.gateway_with_token(gateway_id)?;
+        let selected_models = coordinator.store.selected_models(gateway_id, model_ids)?;
+        let managed_models = coordinator.store.models_for_gateway(gateway_id)?;
+        validate_model_configurations(&selected_models)?;
+        let identity_key = coordinator.store.source_identity_key()?;
+        let credential_revision = gateway_source_hash(&identity_key, &gateway.api_root, &token);
+        let incoming = selected_models
+            .iter()
+            .map(|model| model_config(model, &gateway, &token))
+            .collect();
+        let managed = managed_models
+            .iter()
+            .map(|model| model_config(model, &gateway, &token))
+            .collect();
+        let selected_ids = model_ids.iter().cloned().collect();
+        Ok(Self {
+            gateway,
+            selected_models,
+            managed_models,
+            identity_key,
+            token,
+            credential_revision,
+            incoming,
+            managed,
+            selected_ids,
+        })
+    }
+
+    fn source_hashes(&self) -> Vec<String> {
+        let mut source_hashes: Vec<_> = self
+            .selected_models
+            .iter()
+            .map(|model| {
+                let api_root = model
+                    .configuration
+                    .endpoint_override
+                    .as_deref()
+                    .unwrap_or(&self.gateway.api_root);
+                gateway_source_hash(&self.identity_key, api_root, &self.token)
+            })
+            .collect();
+        source_hashes.push(self.credential_revision.clone());
+        source_hashes.sort_unstable();
+        source_hashes.dedup();
+        source_hashes
+    }
+}
+
+fn validate_request(
+    gateway_id: &str,
+    model_ids: &[String],
+    targets: &[TargetKind],
+) -> CoreResult<()> {
+    if gateway_id.trim().is_empty() || gateway_id.len() > MAX_PUBLISH_IDENTIFIER_BYTES {
+        return Err(CoreError::Validation(
+            "The API source ID must be non-empty and no longer than 512 bytes".to_string(),
+        ));
+    }
     if model_ids.is_empty() {
         return Err(CoreError::Validation(
             "Select at least one model to publish".to_string(),
@@ -441,6 +481,19 @@ fn validate_request(model_ids: &[String], targets: &[TargetKind]) -> CoreResult<
     if targets.is_empty() {
         return Err(CoreError::Validation(
             "Select WorkBuddy, CodeBuddy, or both".to_string(),
+        ));
+    }
+    if model_ids.len() > MAX_PUBLISH_MODELS {
+        return Err(CoreError::Validation(format!(
+            "A publish request can contain at most {MAX_PUBLISH_MODELS} models"
+        )));
+    }
+    if model_ids
+        .iter()
+        .any(|id| id.trim().is_empty() || id.len() > MAX_PUBLISH_IDENTIFIER_BYTES)
+    {
+        return Err(CoreError::Validation(
+            "Model IDs must be non-empty and no longer than 512 bytes".to_string(),
         ));
     }
     let unique_targets: HashSet<_> = targets.iter().collect();
@@ -514,57 +567,23 @@ fn validate_model_configurations(models: &[crate::models::ManagedModel]) -> Core
     Ok(())
 }
 
-fn write_and_verify(target: &PreparedTarget, selected_ids: &HashSet<&str>) -> CoreResult<()> {
-    if current_target_bytes(&target.write_path)? != target.original {
-        return Err(CoreError::Drift(format!(
-            "{} configuration changed immediately before publishing",
-            target.kind.display_name()
-        )));
-    }
-    atomic_write(&target.write_path, &target.output)?;
-    let written = read_target_file(&target.write_path)?;
-    let document = ConfigDocument::parse(&written)?;
-    let written_ids: HashSet<_> = document
-        .models()
-        .iter()
-        .filter_map(|model| model.get("id").and_then(serde_json::Value::as_str))
-        .collect();
-    if !selected_ids.is_subset(&written_ids) {
-        return Err(CoreError::Target(format!(
-            "{} verification failed after writing",
-            target.kind.display_name()
-        )));
-    }
-    Ok(())
+fn write_and_verify(target: &PreparedTarget) -> CoreResult<String> {
+    replace_exact(
+        &target.write_path,
+        target.original.as_deref(),
+        &target.output,
+        target.kind.display_name(),
+    )
+    .map(|verified| verified.fingerprint)
 }
 
 fn rollback_target(target: &PreparedTarget) -> CoreResult<()> {
-    let current = current_target_bytes(&target.write_path)?;
-    if current == target.original {
-        return Ok(());
-    }
-    if current.as_deref() != Some(target.output.as_slice()) {
-        return Err(CoreError::Drift(format!(
-            "{} configuration changed after publishing; external changes were preserved",
-            target.kind.display_name()
-        )));
-    }
-    if let Some(original) = &target.original {
-        atomic_write(&target.write_path, original)
-    } else if target.write_path.exists() {
-        fs::remove_file(&target.write_path).map_err(|error| {
-            CoreError::Target(format!(
-                "Could not remove {}: {error}",
-                target.write_path.display()
-            ))
-        })
-    } else {
-        Ok(())
-    }
-}
-
-fn current_target_bytes(path: &Path) -> CoreResult<Option<Vec<u8>>> {
-    path.exists().then(|| read_target_file(path)).transpose()
+    rollback_exact(
+        &target.write_path,
+        &target.output,
+        target.original.as_deref(),
+        target.kind.display_name(),
+    )
 }
 
 fn rollback_committed(
@@ -590,50 +609,17 @@ fn rollback_committed(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Mutex};
+    use std::collections::HashMap;
 
     use serde_json::{json, Value};
     use tempfile::TempDir;
 
     use super::*;
-    use crate::{
-        models::{CapabilitySet, GatewayProfile, ManagedModel, TargetExpectation},
-        secrets::MISSING_SECRET_MESSAGE,
-    };
-
-    #[derive(Default)]
-    struct MemorySecretStore {
-        values: Mutex<HashMap<String, String>>,
-    }
-
-    impl SecretStore for MemorySecretStore {
-        fn set(&self, key: &str, secret: &str) -> CoreResult<()> {
-            self.values
-                .lock()
-                .unwrap()
-                .insert(key.to_string(), secret.to_string());
-            Ok(())
-        }
-
-        fn get(&self, key: &str) -> CoreResult<String> {
-            self.values
-                .lock()
-                .unwrap()
-                .get(key)
-                .cloned()
-                .ok_or_else(|| CoreError::SecretStore(MISSING_SECRET_MESSAGE.to_string()))
-        }
-
-        fn delete(&self, key: &str) -> CoreResult<()> {
-            self.values.lock().unwrap().remove(key);
-            Ok(())
-        }
-    }
+    use crate::models::{CapabilitySet, GatewayProfile, ManagedModel, TargetExpectation};
 
     struct Fixture {
         directory: TempDir,
         store: Store,
-        secrets: Arc<MemorySecretStore>,
         paths: HashMap<TargetKind, String>,
         backup_root: PathBuf,
     }
@@ -646,7 +632,6 @@ mod tests {
                 id: "gateway".to_string(),
                 name: "Gateway".to_string(),
                 api_root: "https://api.example.com/v1".to_string(),
-                token_ref: "gateway".to_string(),
                 created_at: "2026-08-20T00:00:00Z".to_string(),
                 updated_at: "2026-08-20T00:00:00Z".to_string(),
             };
@@ -665,8 +650,6 @@ mod tests {
                     updated_at: "2026-08-20T00:00:00Z".to_string(),
                 })
                 .unwrap();
-            let secrets = Arc::new(MemorySecretStore::default());
-            secrets.set("gateway", "test-token").unwrap();
             let paths = HashMap::from([
                 (
                     TargetKind::Workbuddy,
@@ -689,7 +672,6 @@ mod tests {
             Self {
                 directory,
                 store,
-                secrets,
                 paths,
                 backup_root,
             }
@@ -698,7 +680,6 @@ mod tests {
         fn coordinator(&self) -> PublishCoordinator<'_> {
             PublishCoordinator {
                 store: &self.store,
-                secrets: self.secrets.clone(),
                 backup_root: &self.backup_root,
             }
         }
@@ -724,12 +705,8 @@ mod tests {
                 })
                 .collect();
             let gateway = self.store.gateway("gateway").unwrap();
-            let token = self.secrets.get("gateway").unwrap();
-            let identity_key = source_identity_key(
-                self.secrets.as_ref(),
-                self.store.has_gateway_source_history().unwrap(),
-            )
-            .unwrap();
+            let token = self.store.gateway_token("gateway").unwrap();
+            let identity_key = self.store.source_identity_key().unwrap();
             ExecutePublishRequest {
                 gateway_id: "gateway".to_string(),
                 model_ids: vec!["gpt-5".to_string()],
@@ -758,13 +735,27 @@ mod tests {
 
     #[test]
     fn rejects_empty_publish_selection() {
-        assert!(validate_request(&[], &[TargetKind::Workbuddy]).is_err());
-        assert!(validate_request(&["gpt-5".to_string()], &[]).is_err());
+        assert!(validate_request("gateway", &[], &[TargetKind::Workbuddy]).is_err());
+        assert!(validate_request("gateway", &["gpt-5".to_string()], &[]).is_err());
         assert!(validate_request(
+            "gateway",
             &["gpt-5".to_string(), "gpt-5".to_string()],
             &[TargetKind::Workbuddy]
         )
         .is_err());
+        assert!(
+            validate_request("gateway", &["x".repeat(513)], &[TargetKind::Workbuddy],).is_err()
+        );
+        assert!(validate_request(
+            &"x".repeat(513),
+            &["gpt-5".to_string()],
+            &[TargetKind::Workbuddy],
+        )
+        .is_err());
+        let too_many_models: Vec<_> = (0..=MAX_PUBLISH_MODELS)
+            .map(|index| format!("model-{index}"))
+            .collect();
+        assert!(validate_request("gateway", &too_many_models, &[TargetKind::Workbuddy],).is_err());
     }
 
     #[test]
@@ -1138,7 +1129,10 @@ mod tests {
         let path = fixture.path(TargetKind::Workbuddy);
         fs::write(&path, b"[]\n").unwrap();
         let request = fixture.request(vec![TargetKind::Workbuddy]);
-        fixture.secrets.set("gateway", "rotated-token").unwrap();
+        fixture
+            .store
+            .save_gateway_token("gateway", "rotated-token")
+            .unwrap();
 
         let error = fixture
             .coordinator()
@@ -1217,7 +1211,7 @@ mod tests {
             output: b"[{\"id\":\"gpt-5\"}]\n".to_vec(),
         };
 
-        let error = write_and_verify(&target, &HashSet::from(["gpt-5"])).unwrap_err();
+        let error = write_and_verify(&target).unwrap_err();
 
         assert!(matches!(error, CoreError::Drift(_)));
         assert_eq!(fs::read(path).unwrap(), external);
