@@ -20,7 +20,7 @@ export interface GatewayInput {
   id?: string;
   name: string;
   baseUrl: string;
-  token: string;
+  token?: string;
 }
 
 export interface SaveGatewayResult {
@@ -118,6 +118,11 @@ export interface TargetModelState {
   matchedModelKeys: string[];
   unmatchedCount: number;
   skippedCount: number;
+}
+
+export interface TargetSnapshot {
+  targets: TargetStatus[];
+  targetModelStates: TargetModelState[];
 }
 
 export interface TargetImportIssue {

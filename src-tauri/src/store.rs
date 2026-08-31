@@ -340,10 +340,11 @@ impl Store {
         gateway_id: &str,
         ids: &[String],
     ) -> CoreResult<Vec<ManagedModel>> {
+        let selected_ids: std::collections::HashSet<_> = ids.iter().collect();
         let models = self.models_for_gateway(gateway_id)?;
         let selected: Vec<_> = models
             .into_iter()
-            .filter(|model| ids.contains(&model.id))
+            .filter(|model| selected_ids.contains(&model.id))
             .collect();
         if selected.len() != ids.len() {
             return Err(CoreError::Validation(

@@ -71,19 +71,40 @@ impl<'a, R: GatewayRepository + ?Sized> GatewayService<'a, R> {
         }
     }
 
+    #[cfg(test)]
     pub fn save(&self, profile: &GatewayProfile, token: &str) -> CoreResult<bool> {
+        self.save_optional(profile, Some(token))
+    }
+
+    pub fn save_optional(
+        &self,
+        profile: &GatewayProfile,
+        replacement_token: Option<&str>,
+    ) -> CoreResult<bool> {
         let previous = self.repository.find_gateway(&profile.id)?;
         let previous_token = previous
             .as_ref()
             .map(|gateway| optional_secret(self.secrets.as_ref(), &gateway.token_ref))
             .transpose()?
             .flatten();
+        let token = replacement_token
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+            .map(ToString::to_string)
+            .or_else(|| previous_token.clone())
+            .ok_or_else(|| {
+                if previous.is_some() {
+                    CoreError::SecretStore(MISSING_SECRET_MESSAGE.to_string())
+                } else {
+                    CoreError::Validation("API token is required".to_string())
+                }
+            })?;
         let models_invalidated = previous.as_ref().is_some_and(|gateway| {
-            gateway.api_root != profile.api_root || previous_token.as_deref() != Some(token)
+            gateway.api_root != profile.api_root || previous_token.as_deref() != Some(&token)
         });
         let identity_key =
             source_identity_key(self.secrets.as_ref(), self.repository.has_source_history()?)?;
-        let source_hash = gateway_source_hash(&identity_key, &profile.api_root, token);
+        let source_hash = gateway_source_hash(&identity_key, &profile.api_root, &token);
         let previous_source_hash =
             previous
                 .as_ref()
@@ -92,7 +113,7 @@ impl<'a, R: GatewayRepository + ?Sized> GatewayService<'a, R> {
                     gateway_source_hash(&identity_key, &gateway.api_root, previous_token)
                 });
 
-        self.secrets.set(&profile.token_ref, token)?;
+        self.secrets.set(&profile.token_ref, &token)?;
         if let Err(error) = self.repository.persist_gateway(
             profile,
             models_invalidated,
@@ -402,5 +423,67 @@ mod tests {
             repository.invalidated.lock().unwrap().as_slice(),
             ["gateway"]
         );
+    }
+
+    #[test]
+    fn omitted_replacement_keeps_the_existing_credential() {
+        let repository = FakeRepository {
+            gateways: Mutex::new(HashMap::from([(
+                "gateway".to_string(),
+                profile("Existing"),
+            )])),
+            ..Default::default()
+        };
+        let secrets = Arc::new(FakeSecretStore::default());
+        secrets.set("gateway", "saved-token").unwrap();
+        let service = GatewayService::new(&repository, secrets.clone());
+
+        assert!(!service.save_optional(&profile("Renamed"), None).unwrap());
+        assert_eq!(secrets.get("gateway").unwrap(), "saved-token");
+        assert_eq!(
+            repository
+                .gateways
+                .lock()
+                .unwrap()
+                .get("gateway")
+                .unwrap()
+                .name,
+            "Renamed"
+        );
+    }
+
+    #[test]
+    fn new_gateway_requires_a_credential() {
+        let repository = FakeRepository::default();
+        let secrets = Arc::new(FakeSecretStore::default());
+        let service = GatewayService::new(&repository, secrets.clone());
+
+        let error = service.save_optional(&profile("New"), None).unwrap_err();
+
+        assert!(matches!(error, CoreError::Validation(_)));
+        assert!(repository.gateways.lock().unwrap().is_empty());
+        assert!(secrets.values.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn missing_saved_credential_fails_before_profile_mutation() {
+        let original = profile("Existing");
+        let repository = FakeRepository {
+            gateways: Mutex::new(HashMap::from([("gateway".to_string(), original.clone())])),
+            ..Default::default()
+        };
+        let secrets = Arc::new(FakeSecretStore::default());
+        let service = GatewayService::new(&repository, secrets.clone());
+
+        let error = service
+            .save_optional(&profile("Must not persist"), None)
+            .unwrap_err();
+
+        assert!(matches!(error, CoreError::SecretStore(_)));
+        assert_eq!(
+            repository.gateways.lock().unwrap().get("gateway").unwrap(),
+            &original
+        );
+        assert!(secrets.values.lock().unwrap().is_empty());
     }
 }

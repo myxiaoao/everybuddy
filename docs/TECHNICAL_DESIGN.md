@@ -294,8 +294,7 @@ WorkBuddy 与 CodeBuddy 的默认路径不同，但共用 `model_config` 和 `Co
 | `apply_openrouter_model`              | 读取 OpenRouter 模型详情，替换 Capability、Evidence 和自动配置                             |
 | `probe_model`                         | 执行 3 个用户确认的能力请求                                                                |
 | `update_model`                        | 保存模型名称、Vendor、人工能力覆盖和完整 Model Configuration                               |
-| `get_target_statuses`                 | 读取 schema、权限、Fingerprint 和 Drift                                                    |
-| `get_target_model_states`             | 只读匹配两个 Target 中的模型，不导入凭据或模型                                             |
+| `get_target_snapshot`                 | 从同一批文件快照读取 schema、权限、Fingerprint、Drift 和模型匹配状态，不导入凭据或模型     |
 | `prepare_publish` / `execute_publish` | 执行两阶段发布                                                                             |
 | `list_backups` / `restore_backup`     | 查询和恢复备份                                                                             |
 | `save_settings`                       | 保存语言、主题、目标和路径                                                                 |

@@ -197,26 +197,29 @@ export function GatewayDialog({
   open,
   busy,
   gateway,
-  initialToken,
   t,
   errorNotice,
   onClose,
   onSubmit,
 }: CommonDialogProps & {
   gateway: GatewayProfile | null;
-  initialToken: string;
   onSubmit: (input: GatewayInput) => void;
 }) {
   const formId = useId();
   const tokenInputId = useId();
   const [name, setName] = useState(gateway?.name ?? "");
   const [baseUrl, setBaseUrl] = useState(gateway?.apiRoot ?? "");
-  const [token, setToken] = useState(initialToken);
+  const [token, setToken] = useState("");
   const [tokenVisible, setTokenVisible] = useState(false);
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    onSubmit({ id: gateway?.id, name, baseUrl, token });
+    onSubmit({
+      id: gateway?.id,
+      name,
+      baseUrl,
+      ...(token.trim() ? { token: token.trim() } : {}),
+    });
   }
 
   return (
@@ -270,10 +273,10 @@ export function GatewayDialog({
           <div className="secret-input">
             <Input
               id={tokenInputId}
-              required
+              required={!gateway}
               value={token}
               onChange={(event) => setToken(event.currentTarget.value)}
-              placeholder="sk-..."
+              placeholder={gateway ? t("gatewayTokenSaved") : "sk-..."}
               type={tokenVisible ? "text" : "password"}
               autoComplete="off"
               spellCheck="false"
@@ -295,7 +298,9 @@ export function GatewayDialog({
               )}
             </Button>
           </div>
-          <small id={`${tokenInputId}-hint`}>{t("gatewayTokenHint")}</small>
+          <small id={`${tokenInputId}-hint`}>
+            {t(gateway ? "gatewayTokenEditHint" : "gatewayTokenHint")}
+          </small>
         </div>
       </form>
     </Modal>

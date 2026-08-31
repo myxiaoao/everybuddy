@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import { Cable, LoaderCircle } from "lucide-react";
 import "./App.css";
 import { api } from "./lib/api";
@@ -14,8 +21,6 @@ import type {
   ManualModelInput,
   ModelUpdateInput,
   PreparePublishRequest,
-  PublishPreview,
-  PublishResult,
   TargetKind,
   TargetImportReport,
   TargetModelState,
@@ -50,6 +55,11 @@ import {
   displayTarget,
   isTargetPublishable,
 } from "./lib/target-utils";
+import {
+  initialWorkspaceWorkflow,
+  isWorkspaceBusy,
+  workspaceWorkflowReducer,
+} from "./lib/workspace-workflow";
 
 type StatusMessage =
   | { key: MessageKey; values?: Record<string, string | number> }
@@ -83,7 +93,10 @@ function App() {
   );
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [workflow, dispatchWorkflow] = useReducer(
+    workspaceWorkflowReducer,
+    initialWorkspaceWorkflow,
+  );
   const [refreshingGatewayIds, setRefreshingGatewayIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -96,21 +109,11 @@ function App() {
   const [editingGateway, setEditingGateway] = useState<GatewayProfile | null>(
     null,
   );
-  const [editingGatewayToken, setEditingGatewayToken] = useState("");
   const [probeDialog, setProbeDialog] = useState(false);
   const [applyingOpenRouter, setApplyingOpenRouter] = useState(false);
   const [openRouterModelMatches, setOpenRouterModelMatches] = useState<
     Record<string, boolean>
   >({});
-  const [publishDialog, setPublishDialog] = useState(false);
-  const [publishPreview, setPublishPreview] = useState<PublishPreview | null>(
-    null,
-  );
-  const [publishResult, setPublishResult] = useState<PublishResult | null>(
-    null,
-  );
-  const [publishRequest, setPublishRequest] =
-    useState<PreparePublishRequest | null>(null);
   const [settingsDialog, setSettingsDialog] = useState(false);
   const [backupsDialog, setBackupsDialog] = useState(false);
   const [backups, setBackups] = useState<BackupRecord[]>([]);
@@ -120,8 +123,6 @@ function App() {
   const [backupToRestore, setBackupToRestore] = useState<BackupRecord | null>(
     null,
   );
-  const [discardDialog, setDiscardDialog] = useState(false);
-  const [dirtyModelKey, setDirtyModelKey] = useState<string | null>(null);
   const [inspectorRevision, setInspectorRevision] = useState(0);
   const [compactView, setCompactView] = useState<WorkspaceView>("gateways");
   const [importReport, setImportReport] = useState<TargetImportReport | null>(
@@ -130,6 +131,12 @@ function App() {
   const [importDetailsExpanded, setImportDetailsExpanded] = useState(false);
   const pendingActionRef = useRef<(() => void | Promise<void>) | null>(null);
   const targetPollErrorLoggedRef = useRef(false);
+  const targetRefreshGenerationRef = useRef(0);
+  const targetRefreshInFlightRef = useRef<Promise<
+    TargetModelState[] | null
+  > | null>(null);
+  const targetSettingsGenerationRef = useRef(0);
+  const publishSessionGenerationRef = useRef(0);
   const selectedGatewayIdRef = useRef<string | null>(null);
   const refreshGenerationsRef = useRef(new Map<string, number>());
   const {
@@ -142,10 +149,24 @@ function App() {
   } = useAppUpdater();
   const handleDirtyChange = useCallback(
     (modelKey: string | null, changed: boolean) => {
-      setDirtyModelKey(changed ? modelKey : null);
+      dispatchWorkflow({
+        type: "dirtyChanged",
+        modelKey: changed ? modelKey : null,
+      });
     },
     [],
   );
+  const busy = isWorkspaceBusy(workflow);
+  const {
+    dirtyModelKey,
+    discardOpen: discardDialog,
+    publishPhase,
+    publishSessionId,
+    publishRequest,
+    publishPreview,
+    publishResult,
+  } = workflow;
+  const publishDialog = publishPhase !== "closed";
 
   const t = useMemo(
     () => createTranslator(settings.language),
@@ -213,26 +234,39 @@ function App() {
     selectedTargets,
   });
 
-  const loadTargets = useCallback(async () => {
-    try {
-      const [nextTargets, nextModelStates] = await Promise.all([
-        api.getTargetStatuses(),
-        api.getTargetModelStates(),
-      ]);
-      setTargets(nextTargets);
-      setTargetModelStates(nextModelStates);
-      targetPollErrorLoggedRef.current = false;
-      return nextModelStates;
-    } catch (caught) {
-      if (!targetPollErrorLoggedRef.current) {
-        reportFrontendWarning("target-state.refresh", caught);
-        targetPollErrorLoggedRef.current = true;
-      }
-      return null;
+  const loadTargets = useCallback((force = false) => {
+    if (!force && targetRefreshInFlightRef.current) {
+      return targetRefreshInFlightRef.current;
     }
+    const generation = ++targetRefreshGenerationRef.current;
+    const request = api
+      .getTargetSnapshot()
+      .then((snapshot) => {
+        if (targetRefreshGenerationRef.current !== generation) return null;
+        setTargets(snapshot.targets);
+        setTargetModelStates(snapshot.targetModelStates);
+        targetPollErrorLoggedRef.current = false;
+        return snapshot.targetModelStates;
+      })
+      .catch((caught: unknown) => {
+        if (targetRefreshGenerationRef.current !== generation) return null;
+        if (!targetPollErrorLoggedRef.current) {
+          reportFrontendWarning("target-state.refresh", caught);
+          targetPollErrorLoggedRef.current = true;
+        }
+        return null;
+      })
+      .finally(() => {
+        if (targetRefreshInFlightRef.current === request) {
+          targetRefreshInFlightRef.current = null;
+        }
+      });
+    targetRefreshInFlightRef.current = request;
+    return request;
   }, []);
 
   useEffect(() => {
+    const targetGeneration = ++targetRefreshGenerationRef.current;
     void (async () => {
       try {
         const data = await api.bootstrap();
@@ -249,8 +283,10 @@ function App() {
           ),
         );
         setModels(data.models);
-        setTargets(data.targets);
-        setTargetModelStates(data.targetModelStates);
+        if (targetRefreshGenerationRef.current === targetGeneration) {
+          setTargets(data.targets);
+          setTargetModelStates(data.targetModelStates);
+        }
         setImportReport(
           data.importReport.importedGatewayCount > 0 ||
             data.importReport.importedModelCount > 0 ||
@@ -331,21 +367,20 @@ function App() {
       return;
     }
     pendingActionRef.current = action;
-    setDiscardDialog(true);
+    dispatchWorkflow({ type: "discardRequested" });
   }
 
   function discardChanges() {
     const action = pendingActionRef.current;
     pendingActionRef.current = null;
-    setDiscardDialog(false);
-    setDirtyModelKey(null);
+    dispatchWorkflow({ type: "discardConfirmed" });
     setInspectorRevision((current) => current + 1);
     if (action) void action();
   }
 
   function cancelDiscard() {
     pendingActionRef.current = null;
-    setDiscardDialog(false);
+    dispatchWorkflow({ type: "discardCancelled" });
   }
 
   function selectGateway(id: string) {
@@ -366,24 +401,14 @@ function App() {
   function openAddGateway() {
     runAfterDiscard(() => {
       setEditingGateway(null);
-      setEditingGatewayToken("");
       setGatewayDialog(true);
     });
   }
 
-  async function openEditGateway(gateway: GatewayProfile) {
-    setBusy(true);
+  function openEditGateway(gateway: GatewayProfile) {
     setError(null);
-    try {
-      const token = await api.getGatewayToken(gateway.id);
-      setEditingGateway(gateway);
-      setEditingGatewayToken(token);
-      setGatewayDialog(true);
-    } catch (caught) {
-      showError(caught);
-    } finally {
-      setBusy(false);
-    }
+    setEditingGateway(gateway);
+    setGatewayDialog(true);
   }
 
   function requestEditGateway(gateway: GatewayProfile) {
@@ -393,11 +418,10 @@ function App() {
   function closeGatewayDialog() {
     setGatewayDialog(false);
     setEditingGateway(null);
-    setEditingGatewayToken("");
   }
 
   async function saveGateway(input: GatewayInput) {
-    setBusy(true);
+    dispatchWorkflow({ type: "operationStarted" });
     setError(null);
     try {
       const { profile, modelsInvalidated } = await api.saveGateway(input);
@@ -431,7 +455,7 @@ function App() {
     } catch (caught) {
       showError(caught);
     } finally {
-      setBusy(false);
+      dispatchWorkflow({ type: "operationFinished" });
     }
   }
 
@@ -486,7 +510,7 @@ function App() {
   }
 
   async function saveManualModel(input: ManualModelInput) {
-    setBusy(true);
+    dispatchWorkflow({ type: "operationStarted" });
     setError(null);
     try {
       const model = await api.addManualModel(input);
@@ -505,7 +529,7 @@ function App() {
     } catch (caught) {
       showError(caught);
     } finally {
-      setBusy(false);
+      dispatchWorkflow({ type: "operationFinished" });
     }
   }
 
@@ -514,7 +538,7 @@ function App() {
   }
 
   async function removeGateway(gateway: GatewayProfile) {
-    setBusy(true);
+    dispatchWorkflow({ type: "operationStarted" });
     try {
       await api.deleteGateway(gateway.id);
       const remaining = gateways.filter((item) => item.id !== gateway.id);
@@ -543,7 +567,7 @@ function App() {
     } catch (caught) {
       showError(caught);
     } finally {
-      setBusy(false);
+      dispatchWorkflow({ type: "operationFinished" });
     }
   }
 
@@ -573,39 +597,39 @@ function App() {
   }
 
   async function applyOpenRouter(modelKey: string) {
-    setBusy(true);
+    dispatchWorkflow({ type: "operationStarted" });
     setApplyingOpenRouter(true);
     setError(null);
     try {
       const updated = await api.applyOpenRouterModel(modelKey);
       replaceModel(updated);
-      setDirtyModelKey(null);
+      dispatchWorkflow({ type: "dirtyChanged", modelKey: null });
       setStatusMessage({ key: "openRouterApplied" });
     } catch (caught) {
       showError(caught);
     } finally {
       setApplyingOpenRouter(false);
-      setBusy(false);
+      dispatchWorkflow({ type: "operationFinished" });
     }
   }
 
   async function saveModel(input: ModelUpdateInput) {
-    setBusy(true);
+    dispatchWorkflow({ type: "operationStarted" });
     try {
       const updated = await api.updateModel(input);
       replaceModel(updated);
-      setDirtyModelKey(null);
+      dispatchWorkflow({ type: "dirtyChanged", modelKey: null });
       setStatusMessage({ key: "modelConfigSaved" });
     } catch (caught) {
       showError(caught);
     } finally {
-      setBusy(false);
+      dispatchWorkflow({ type: "operationFinished" });
     }
   }
 
   async function runProbe() {
     if (!activeModel) return;
-    setBusy(true);
+    dispatchWorkflow({ type: "operationStarted" });
     try {
       const summary = await api.probeModel(activeModel.key);
       replaceModel(summary.model);
@@ -618,7 +642,7 @@ function App() {
     } catch (caught) {
       showError(caught);
     } finally {
-      setBusy(false);
+      dispatchWorkflow({ type: "operationFinished" });
     }
   }
 
@@ -638,15 +662,20 @@ function App() {
       selectedTargets,
       targetSelectionInitialized: true,
     };
+    const previous = settings;
+    const generation = ++targetSettingsGenerationRef.current;
     setSettings(next);
-    setBusy(true);
+    dispatchWorkflow({ type: "operationStarted" });
     try {
-      await api.saveSettings(next);
+      const saved = await api.saveSettings(next);
+      if (targetSettingsGenerationRef.current !== generation) return;
+      setSettings(saved);
     } catch (caught) {
-      setSettings(settings);
+      if (targetSettingsGenerationRef.current !== generation) return;
+      setSettings(previous);
       showError(caught);
     } finally {
-      setBusy(false);
+      dispatchWorkflow({ type: "operationFinished" });
     }
   }
 
@@ -659,77 +688,85 @@ function App() {
         .map((model) => model.id),
       targets: selectedTargets,
     };
-    setPublishRequest(request);
-    setPublishPreview(null);
-    setPublishResult(null);
-    setPublishDialog(true);
-    setBusy(true);
+    const sessionId = ++publishSessionGenerationRef.current;
+    dispatchWorkflow({ type: "publishPreviewRequested", sessionId, request });
+    dispatchWorkflow({ type: "operationStarted" });
     try {
-      setPublishPreview(await api.preparePublish(request));
+      const preview = await api.preparePublish(request);
+      dispatchWorkflow({ type: "publishPreviewLoaded", sessionId, preview });
     } catch (caught) {
-      setPublishDialog(false);
+      dispatchWorkflow({ type: "publishPreviewFailed", sessionId });
       showError(caught);
     } finally {
-      setBusy(false);
+      dispatchWorkflow({ type: "operationFinished" });
     }
   }
 
   async function executePublish(acceptConflicts: boolean) {
-    if (!publishRequest || !publishPreview) return;
-    setBusy(true);
+    if (
+      publishPhase !== "ready" ||
+      publishSessionId === null ||
+      !publishRequest ||
+      !publishPreview
+    )
+      return;
+    const sessionId = publishSessionId;
+    const request = publishRequest;
+    const preview = publishPreview;
+    dispatchWorkflow({ type: "publishExecutionStarted", sessionId });
+    dispatchWorkflow({ type: "operationStarted" });
     try {
       const result = await api.executePublish(
-        publishRequest,
-        publishPreview,
+        request,
+        preview,
         acceptConflicts,
       );
-      setPublishResult(result);
+      dispatchWorkflow({ type: "publishExecutionFinished", sessionId, result });
       setStatusMessage({
         key: result.success ? "published" : "publishFailed",
       });
-      await loadTargets();
+      await loadTargets(true);
       if (result.success) {
         clearSelectionOverrides(
-          publishRequest.modelIds.map(
-            (id) => `${publishRequest.gatewayId}::${id}`,
-          ),
+          request.modelIds.map((id) => `${request.gatewayId}::${id}`),
         );
       }
     } catch (caught) {
+      dispatchWorkflow({ type: "publishExecutionFailed", sessionId });
       showError(caught);
     } finally {
-      setBusy(false);
+      dispatchWorkflow({ type: "operationFinished" });
     }
   }
 
   async function saveSettings(next: AppSettings) {
-    setBusy(true);
+    dispatchWorkflow({ type: "operationStarted" });
     try {
       const saved = await api.saveSettings(next);
       setSettings(saved);
       setSettingsDialog(false);
-      await loadTargets();
+      await loadTargets(true);
     } catch (caught) {
       showError(caught);
     } finally {
-      setBusy(false);
+      dispatchWorkflow({ type: "operationFinished" });
     }
   }
 
   async function openBackups() {
     setBackupsDialog(true);
-    setBusy(true);
+    dispatchWorkflow({ type: "operationStarted" });
     try {
       setBackups(await api.listBackups());
     } catch (caught) {
       showError(caught);
     } finally {
-      setBusy(false);
+      dispatchWorkflow({ type: "operationFinished" });
     }
   }
 
   async function restoreBackup(backup: BackupRecord) {
-    setBusy(true);
+    dispatchWorkflow({ type: "operationStarted" });
     try {
       await api.restoreBackup(backup.id);
       setStatusMessage({ key: "restore" });
@@ -737,7 +774,7 @@ function App() {
       const previousKeys =
         targetModelStates.find((state) => state.target === backup.target)
           ?.matchedModelKeys ?? [];
-      const nextStates = await loadTargets();
+      const nextStates = await loadTargets(true);
       const restoredKeys =
         nextStates?.find((state) => state.target === backup.target)
           ?.matchedModelKeys ?? [];
@@ -746,7 +783,7 @@ function App() {
     } catch (caught) {
       showError(caught);
     } finally {
-      setBusy(false);
+      dispatchWorkflow({ type: "operationFinished" });
     }
   }
 
@@ -961,7 +998,6 @@ function App() {
             open
             busy={busy}
             gateway={editingGateway}
-            initialToken={editingGatewayToken}
             t={t}
             errorNotice={dialogErrorNotice("gateway")}
             onClose={closeGatewayDialog}
@@ -997,7 +1033,7 @@ function App() {
             result={publishResult}
             t={t}
             errorNotice={dialogErrorNotice("publish")}
-            onClose={() => setPublishDialog(false)}
+            onClose={() => dispatchWorkflow({ type: "publishClosed" })}
             onConfirm={(accepted) => void executePublish(accepted)}
           />
         ) : null}

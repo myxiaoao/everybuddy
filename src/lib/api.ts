@@ -19,6 +19,7 @@ import type {
   TargetKind,
   TargetImportReport,
   TargetModelState,
+  TargetSnapshot,
   TargetStatus,
 } from "../types";
 import { isValidModelConfiguration } from "./model-configuration";
@@ -30,7 +31,6 @@ export const api = {
   bootstrap: () => call<BootstrapData>("bootstrap"),
   saveGateway: (input: GatewayInput) =>
     call<SaveGatewayResult>("save_gateway", { input }),
-  getGatewayToken: (id: string) => call<string>("get_gateway_token", { id }),
   deleteGateway: (id: string) => call<void>("delete_gateway", { id }),
   discoverModels: (gatewayId: string) =>
     call<ManagedModel[]>("discover_models", { gatewayId }),
@@ -51,9 +51,7 @@ export const api = {
     }
     return call<ManagedModel>("update_model", { input });
   },
-  getTargetStatuses: () => call<TargetStatus[]>("get_target_statuses"),
-  getTargetModelStates: () =>
-    call<TargetModelState[]>("get_target_model_states"),
+  getTargetSnapshot: () => call<TargetSnapshot>("get_target_snapshot"),
   preparePublish: (request: PreparePublishRequest) =>
     call<PublishPreview>("prepare_publish", { request }),
   executePublish: (
@@ -310,7 +308,8 @@ async function demoCall(
         existing &&
         (existing.apiRoot !==
           input.baseUrl.replace(/\/models\/?$/, "").replace(/\/$/, "") ||
-          demoTokens.get(existing.id) !== input.token),
+          (input.token !== undefined &&
+            demoTokens.get(existing.id) !== input.token)),
       );
       const profile: GatewayProfile = {
         id: input.id ?? `demo-gateway-${demoGateways.length + 1}`,
@@ -325,25 +324,13 @@ async function demoCall(
             gateway.id === profile.id ? profile : gateway,
           )
         : [...demoGateways, profile];
-      demoTokens.set(profile.id, input.token);
+      if (input.token !== undefined) demoTokens.set(profile.id, input.token);
       if (modelsInvalidated) {
         demoModels = demoModels.filter(
           (model) => model.gatewayId !== profile.id,
         );
       }
       return { profile, modelsInvalidated } satisfies SaveGatewayResult;
-    }
-    case "get_gateway_token": {
-      const id = String((args as { id: string }).id);
-      const token = demoTokens.get(id);
-      if (!token) {
-        throw {
-          code: "SECRET_STORE_ERROR",
-          message:
-            "The gateway token is missing from the system credential store",
-        } satisfies AppError;
-      }
-      return token;
     }
     case "delete_gateway": {
       const id = String((args as { id: string }).id);
@@ -409,10 +396,11 @@ async function demoCall(
       );
       return demoModels.find((model) => model.key === input.modelKey);
     }
-    case "get_target_statuses":
-      return demoTargets;
-    case "get_target_model_states":
-      return demoTargetModelStates;
+    case "get_target_snapshot":
+      return {
+        targets: demoTargets,
+        targetModelStates: demoTargetModelStates,
+      } satisfies TargetSnapshot;
     case "prepare_publish": {
       const request = (args as { request: PreparePublishRequest }).request;
       return {

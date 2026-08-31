@@ -110,7 +110,7 @@ fn concurrent_bootstrap_imports_one_gateway() {
 }
 
 #[test]
-fn cleans_up_imported_credential_when_a_later_target_path_is_missing() {
+fn missing_target_path_stops_import_before_credentials_are_written() {
     let directory = tempdir().unwrap();
     let workbuddy_path = directory.path().join("workbuddy-models.json");
     std::fs::write(
@@ -133,10 +133,7 @@ fn cleans_up_imported_credential_when_a_later_target_path_is_missing() {
     assert!(error
         .to_string()
         .contains("CodeBuddy path is not configured"));
-    assert_eq!(
-        stored_keys,
-        vec!["__everybuddy_source_identity_key_v1".to_string()]
-    );
+    assert!(stored_keys.is_empty());
     assert!(store.list_gateways().unwrap().is_empty());
 }
 

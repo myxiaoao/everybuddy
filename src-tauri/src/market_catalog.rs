@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -251,6 +251,7 @@ impl MarketCatalogClient {
                 "The OpenRouter model endpoint returned an empty model ID".into(),
             ));
         }
+        validate_model_detail_identity(&matched, &payload.data)?;
         Ok(payload.data)
     }
 
@@ -284,8 +285,15 @@ impl MarketCatalogSnapshot {
         let mut unique_leaf_ids = HashMap::new();
         for model in models {
             let id = normalize_model_id(&model.id);
-            if id.is_empty() || by_id.contains_key(&id) {
-                continue;
+            if id.is_empty() {
+                return Err(CoreError::Protocol(
+                    "The OpenRouter models endpoint returned an empty model ID".into(),
+                ));
+            }
+            if by_id.contains_key(&id) {
+                return Err(CoreError::Protocol(format!(
+                    "The OpenRouter models endpoint returned duplicate model ID {id}"
+                )));
             }
             let leaf = model_leaf(&id).to_string();
             unique_leaf_ids
@@ -712,6 +720,33 @@ fn model_detail_url(base: &str, model_id: &str) -> CoreResult<Url> {
     Ok(url)
 }
 
+fn validate_model_detail_identity(matched: &MarketModel, detail: &MarketModel) -> CoreResult<()> {
+    let matched_ids = model_identity_slugs(matched);
+    let detail_ids = model_identity_slugs(detail);
+    if matched_ids.is_disjoint(&detail_ids) {
+        return Err(CoreError::Protocol(
+            "The OpenRouter model detail does not match the selected catalog model".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn model_identity_slugs(model: &MarketModel) -> HashSet<String> {
+    [
+        Some(model.id.as_str()),
+        model.canonical_slug.as_deref(),
+        model
+            .alias_target
+            .as_ref()
+            .map(|target| target.slug.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    .map(normalize_model_id)
+    .filter(|id| !id.is_empty())
+    .collect()
+}
+
 fn normalize_model_id(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
@@ -911,6 +946,34 @@ mod tests {
         .unwrap();
 
         assert!(snapshot.find("shared", "custom").is_none());
+    }
+
+    #[test]
+    fn rejects_duplicate_normalized_model_ids() {
+        let error = MarketCatalogSnapshot::new(vec![
+            model("OpenAI/GPT-Test", &["text"], &["text"], &[]),
+            model(" openai/gpt-test ", &["text"], &["text"], &["tools"]),
+        ])
+        .unwrap_err();
+
+        assert!(matches!(error, CoreError::Protocol(_)));
+    }
+
+    #[test]
+    fn model_detail_requires_an_explicit_identity_relationship() {
+        let matched = model("openai/gpt-test", &["text"], &["text"], &[]);
+        let unrelated = model("anthropic/claude-test", &["text"], &["text"], &[]);
+        assert!(matches!(
+            validate_model_detail_identity(&matched, &unrelated),
+            Err(CoreError::Protocol(_))
+        ));
+
+        let mut alias = model("~openai/latest", &["text"], &["text"], &[]);
+        alias.alias_target = Some(MarketAliasTarget {
+            name: None,
+            slug: matched.id.clone(),
+        });
+        validate_model_detail_identity(&matched, &alias).unwrap();
     }
 
     #[test]
