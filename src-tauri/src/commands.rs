@@ -44,11 +44,11 @@ pub fn bootstrap(state: State<'_, AppState>) -> CommandResult<BootstrapData> {
 }
 
 #[tauri::command]
-pub fn get_gateway_token(id: String, state: State<'_, AppState>) -> CommandResult<String> {
+pub fn get_gateway_token(id: String, state: State<'_, AppState>) -> CommandResult<Option<String>> {
+    state.store.gateway(&id).map_err(CommandError::from)?;
     state
         .store
-        .gateway_with_token(&id)
-        .map(|(_, token)| token)
+        .optional_gateway_token(&id)
         .map_err(CommandError::from)
 }
 

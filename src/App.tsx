@@ -411,7 +411,7 @@ function App() {
     dispatchWorkflow({ type: "operationStarted" });
     setError(null);
     try {
-      const token = await api.getGatewayToken(gateway.id);
+      const token = (await api.getGatewayToken(gateway.id)) ?? "";
       setEditingGatewayToken(token);
       setEditingGateway(gateway);
       setGatewayDialog(true);

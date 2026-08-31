@@ -29,7 +29,8 @@ const demoEnabled =
 
 export const api = {
   bootstrap: () => call<BootstrapData>("bootstrap"),
-  getGatewayToken: (id: string) => call<string>("get_gateway_token", { id }),
+  getGatewayToken: (id: string) =>
+    call<string | null>("get_gateway_token", { id }),
   saveGateway: (input: GatewayInput) =>
     call<SaveGatewayResult>("save_gateway", { input }),
   deleteGateway: (id: string) => call<void>("delete_gateway", { id }),
@@ -303,13 +304,7 @@ async function demoCall(
     case "get_gateway_token": {
       const id = String((args as { id: string }).id);
       const token = demoTokens.get(id);
-      if (!token) {
-        throw {
-          code: "CREDENTIAL_ERROR",
-          message: "The gateway token is missing from the local database",
-        } satisfies AppError;
-      }
-      return token;
+      return token ?? null;
     }
     case "save_gateway": {
       const input = (args as { input: GatewayInput }).input;

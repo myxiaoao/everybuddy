@@ -12,7 +12,7 @@
 
 EveryBuddy 是一款面向个人开发者的开源桌面应用。它集中管理多个 OpenAI-compatible API 来源，再把选中的模型配置发布到 WorkBuddy、CodeBuddy 或两个目标。
 
-> 当前稳定版本：`0.1.1`。EveryBuddy 会在发布前备份并校验目标配置，仍建议将现有 `models.json` 纳入本机备份。
+> 当前稳定版本：`0.1.2`。EveryBuddy 会在发布前备份并校验目标配置，仍建议将现有 `models.json` 纳入本机备份。
 
 ![EveryBuddy 工作区](docs/assets/everybuddy-workspace.png)
 

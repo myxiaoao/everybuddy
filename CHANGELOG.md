@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-31
+
+### Added
+
+- 编辑 API 来源时可读取已有 Token；输入框默认隐藏内容，并保留显示与隐藏切换。
+
+### Changed
+
+- 将 API 来源 Token 以明文保存到 EveryBuddy 本地 SQLite 数据库，并限制数据库、WAL、SHM、备份及目标文件的本机访问权限。
+- API 来源导入时通过同一事务保存来源、Token、模型和来源信息，避免部分写入。
+- 整合目标检查、模型生命周期和目标文件 Codec，强化预览、写入、Drift 检测与回滚流程。
+
+### Fixed
+
+- 在并发刷新、发布会话和条件写入期间拒绝过期结果，避免外部改动被旧状态覆盖。
+- 强化双目标发布的补偿回滚和首次创建文件时的失败清理。
+
 ## [0.1.1] - 2026-08-28
 
 ### Added
@@ -46,7 +63,8 @@
 - 在 Gateway 刷新、模型 Probe 和配置发布期间检测并发修改，避免旧请求覆盖新状态。
 - 强化 Target 路径、Credential 来源、发布状态和备份回滚校验，避免部分失败留下不一致状态。
 
-[Unreleased]: https://github.com/myxiaoao/everybuddy/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/myxiaoao/everybuddy/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/myxiaoao/everybuddy/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/myxiaoao/everybuddy/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/myxiaoao/everybuddy/compare/v0.1.0-alpha.1...v0.1.0
 [0.1.0-alpha.1]: https://github.com/myxiaoao/everybuddy/releases/tag/v0.1.0-alpha.1

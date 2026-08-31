@@ -323,7 +323,7 @@ Fake Gateway 测试实际验证 HTTP Path、Bearer Header 和模型响应解析�
 
 发布测试覆盖 WorkBuddy 单目标、CodeBuddy 单目标、双目标成功、第二目标失败补偿、首次创建文件的失败清理、API 与 credential revision、路径和 symlink 变化、写前 Drift、外部修改后的条件回滚、备份恢复、恢复状态保存失败回滚、每个目标保留 10 份备份，以及 SQLite 状态 transaction 失败后的文件回滚。Target 测试覆盖 8 MiB/10,000 条限制和重复 Model ID。Gateway Service 测试覆盖保存、删除、Token 复用、缺失 Token 和来源变化，错误文本不得包含 Token。
 
-CI 固定使用 pnpm `11.22.0`、Node.js 22 和 Rust `1.91.1`。Release workflow 只接受属于 `main` 的版本 Tag，并在 `release` Environment 审批后构建 macOS Universal 和 Windows x64 安装包。当前稳定版本为 `0.1.1`；workflow 创建 Draft（非 Prerelease），并验证 Tauri Updater Artifact、`latest.json`、`.sig`、安装包和 `SHA256SUMS.txt`。安装包暂未使用 Apple notarization 或 Windows Authenticode，Release 和 README 必须明确显示未验证开发者警告。
+CI 固定使用 pnpm `11.22.0`、Node.js 22 和 Rust `1.91.1`。Release workflow 只接受属于 `main` 的版本 Tag，并在 `release` Environment 审批后构建 macOS Universal 和 Windows x64 安装包。当前稳定版本为 `0.1.2`；workflow 创建 Draft（非 Prerelease），并验证 Tauri Updater Artifact、`latest.json`、`.sig`、安装包和 `SHA256SUMS.txt`。安装包暂未使用 Apple notarization 或 Windows Authenticode，Release 和 README 必须明确显示未验证开发者警告。
 
 Updater private key 使用 GitHub Secrets：
 

@@ -25,7 +25,7 @@ describe("EveryBuddy workspace", () => {
       expect(screen.getAllByText("GPT-5.6").length).toBeGreaterThan(0),
     );
     expect(screen.getAllByText("Sub2API").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText("v0.1.1")).toBeInTheDocument();
+    expect(screen.getByText("v0.1.2")).toBeInTheDocument();
     expect(screen.getByText("Local Relay")).toBeInTheDocument();
     expect(screen.getAllByText("WorkBuddy").length).toBeGreaterThan(0);
     expect(screen.getAllByText("CodeBuddy").length).toBeGreaterThan(0);
@@ -182,6 +182,22 @@ describe("EveryBuddy workspace", () => {
     expect(tokenInput).toHaveValue("replacement-token");
     fireEvent.click(within(dialog).getByRole("button", { name: "隐藏 Token" }));
     expect(tokenInput).toHaveAttribute("type", "password");
+  });
+
+  it("allows a missing migrated token to be re-entered", async () => {
+    vi.spyOn(api, "getGatewayToken").mockResolvedValue(null);
+    render(<App />);
+
+    await screen.findAllByText("Sub2API");
+    fireEvent.click(screen.getByRole("button", { name: "编辑 API" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "编辑 API" });
+    const tokenInput = within(dialog).getByLabelText("Token Key");
+    expect(tokenInput).toHaveValue("");
+    expect(tokenInput).toBeRequired();
+
+    fireEvent.change(tokenInput, { target: { value: "replacement-token" } });
+    expect(tokenInput).toHaveValue("replacement-token");
   });
 
   it("toggles a configuration target from the full card", async () => {

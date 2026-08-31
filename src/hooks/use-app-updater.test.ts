@@ -46,12 +46,12 @@ afterEach(() => {
 
 describe("useAppUpdater", () => {
   it("reads the runtime version and checks on launch", async () => {
-    tauriMocks.getVersion.mockResolvedValue("0.1.1");
+    tauriMocks.getVersion.mockResolvedValue("0.1.2");
 
     const { result } = renderHook(() => useAppUpdater());
 
     await waitFor(() => {
-      expect(result.current.currentVersion).toBe("0.1.1");
+      expect(result.current.currentVersion).toBe("0.1.2");
       expect(result.current.updateCheckStatus).toBe("latest");
     });
     expect(tauriMocks.check).toHaveBeenCalledOnce();
