@@ -70,8 +70,7 @@ export const api = {
           writePath: target.writePath,
           fingerprint: target.fingerprint,
         })),
-        gatewayRevision: preview.gatewayRevision,
-        credentialRevision: preview.credentialRevision,
+        sourceRevisions: preview.sourceRevisions,
         modelRevisions: preview.modelRevisions,
         acceptConflicts,
       },
@@ -407,46 +406,96 @@ async function demoCall(
       } satisfies TargetSnapshot;
     case "prepare_publish": {
       const request = (args as { request: PreparePublishRequest }).request;
+      const ids = request.sources.flatMap((source) => source.modelIds);
+      if (new Set(ids).size !== ids.length)
+        throw new Error("Choose one API source per Model ID");
+      const sourceIds = new Set(
+        request.sources.map((source) => source.gatewayId),
+      );
+      const conflicts = request.targets.flatMap((target) => {
+        const state = demoTargetModelStates.find(
+          (state) => state.target === target,
+        );
+        return demoModels
+          .filter(
+            (model) =>
+              state?.matchedModelKeys.includes(model.key) &&
+              ids.includes(model.id),
+          )
+          .map((model) => ({
+            target,
+            modelId: model.id,
+            existingName: model.name,
+          }));
+      });
       return {
         targets: request.targets.map((target) => ({
           target,
           path: demoSettings.targetPaths[target],
           writePath: demoSettings.targetPaths[target],
           fingerprint: `demo-${target}`,
-          addCount: request.modelIds.length - 1,
-          updateCount: 1,
+          addCount:
+            ids.length -
+            conflicts.filter((conflict) => conflict.target === target).length,
+          updateCount: conflicts.filter(
+            (conflict) => conflict.target === target,
+          ).length,
           unchangedCount: 0,
-        })),
-        conflicts: request.targets.map((target) => ({
-          target,
-          modelId: request.modelIds[0],
-          existingName: request.modelIds[0],
-        })),
-        warnings: ["Target configuration files contain the API token."],
-        gatewayRevision:
-          demoGateways.find((gateway) => gateway.id === request.gatewayId)
-            ?.updatedAt ?? now,
-        credentialRevision: `demo-credential-${request.gatewayId}`,
-        modelRevisions: demoModels
-          .filter(
+          removeCount: demoModels.filter(
             (model) =>
-              model.gatewayId === request.gatewayId &&
-              request.modelIds.includes(model.id),
-          )
+              sourceIds.has(model.gatewayId) &&
+              !ids.includes(model.id) &&
+              demoTargetModelStates
+                .find((state) => state.target === target)
+                ?.matchedModelKeys.includes(model.key),
+          ).length,
+        })),
+        conflicts,
+        warnings: ["Target configuration files contain the API token."],
+        sourceRevisions: request.sources.map((source) => ({
+          gatewayId: source.gatewayId,
+          modelIds: [...source.modelIds].sort(),
+          gatewayRevision:
+            demoGateways.find((gateway) => gateway.id === source.gatewayId)
+              ?.updatedAt ?? now,
+          credentialRevision: `demo-credential-${source.gatewayId}`,
+        })),
+        sources: request.sources.map((source) => ({
+          ...source,
+          gatewayName:
+            demoGateways.find((gateway) => gateway.id === source.gatewayId)
+              ?.name ?? source.gatewayId,
+        })),
+        modelRevisions: demoModels
+          .filter((model) => sourceIds.has(model.gatewayId))
           .map((model) => ({ key: model.key, updatedAt: model.updatedAt })),
       } satisfies PublishPreview;
     }
     case "execute_publish": {
       const request = (args as { request: PreparePublishRequest }).request;
-      const publishedKeys = request.modelIds.map(
-        (id) => `${request.gatewayId}::${id}`,
+      const publishedKeys = request.sources.flatMap((source) =>
+        source.modelIds.map((id) => `${source.gatewayId}::${id}`),
+      );
+      const publishedIds = new Set(
+        request.sources.flatMap((source) => source.modelIds),
+      );
+      const sourceIds = new Set(
+        request.sources.map((source) => source.gatewayId),
       );
       demoTargetModelStates = demoTargetModelStates.map((state) =>
         request.targets.includes(state.target)
           ? {
               ...state,
               matchedModelKeys: [
-                ...new Set([...state.matchedModelKeys, ...publishedKeys]),
+                ...state.matchedModelKeys.filter((key) => {
+                  const model = demoModels.find((model) => model.key === key);
+                  return (
+                    model &&
+                    !sourceIds.has(model.gatewayId) &&
+                    !publishedIds.has(model.id)
+                  );
+                }),
+                ...publishedKeys,
               ],
             }
           : state,

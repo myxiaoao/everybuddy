@@ -37,6 +37,7 @@ import { TargetIcon } from "./TargetIcon";
 interface InspectorPanelProps {
   model: ManagedModel | null;
   selectedCount: number;
+  selectedSourceCount?: number;
   targets: TargetStatus[];
   selectedTargets: TargetKind[];
   busy: boolean;
@@ -57,6 +58,7 @@ interface InspectorPanelProps {
 export function InspectorPanel({
   model,
   selectedCount,
+  selectedSourceCount = 1,
   targets,
   selectedTargets,
   busy,
@@ -402,7 +404,7 @@ export function InspectorPanel({
             </div>
 
             <div
-              className={`publish-readiness${selectedCount > 0 && selectedTargets.length > 0 ? " is-ready" : ""}`}
+              className={`publish-readiness${selectedSourceCount > 0 && selectedTargets.length > 0 ? " is-ready" : ""}`}
             >
               <GitCompareArrows aria-hidden="true" size={18} />
               <div>
@@ -412,7 +414,12 @@ export function InspectorPanel({
                     targets: selectedTargets.length,
                   })}
                 </strong>
-                <small>{t("publishHint")}</small>
+                <small>
+                  {t("globalPublishSelection", {
+                    sources: selectedSourceCount,
+                    models: selectedCount,
+                  })}
+                </small>
               </div>
             </div>
           </section>

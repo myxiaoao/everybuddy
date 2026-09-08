@@ -44,6 +44,11 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ImportNotice } from "./components/ImportNotice";
 import { ErrorNotice } from "./components/ErrorNotice";
 import { useAppUpdater } from "./hooks/use-app-updater";
+import { PublishSourcesDialog } from "./components/PublishSourcesDialog";
+import {
+  findPublishSourceConflicts,
+  resolvePublishSources,
+} from "./lib/publish-selection";
 import {
   reportFrontendError,
   reportFrontendWarning,
@@ -120,6 +125,8 @@ function App() {
   const [targetsStale, setTargetsStale] = useState(false);
   const [backupsStale, setBackupsStale] = useState(false);
   const [settingsDialog, setSettingsDialog] = useState(false);
+  const [sourceChoiceRequest, setSourceChoiceRequest] =
+    useState<PreparePublishRequest | null>(null);
   const [backupsDialog, setBackupsDialog] = useState(false);
   const [backups, setBackups] = useState<BackupRecord[]>([]);
   const [gatewayToDelete, setGatewayToDelete] = useState<GatewayProfile | null>(
@@ -231,6 +238,8 @@ function App() {
     selection: modelSelection,
     selectedKeys,
     selectedModelCount,
+    globalModelCount,
+    publishSources,
     toggleAll,
     clearSelection,
     toggleModel,
@@ -701,14 +710,20 @@ function App() {
   }
 
   async function previewPublish() {
-    if (!selectedGateway) return;
+    if (busy || refreshingGatewayIds.size > 0) return;
     const request: PreparePublishRequest = {
-      gatewayId: selectedGateway.id,
-      modelIds: gatewayModels
-        .filter((model) => selectedKeys.has(model.key))
-        .map((model) => model.id),
+      sources: publishSources,
       targets: selectedTargets,
     };
+    setError(null);
+    if (findPublishSourceConflicts(request.sources, gateways).length > 0) {
+      setSourceChoiceRequest(request);
+      return;
+    }
+    await preparePublishRequest(request);
+  }
+
+  async function preparePublishRequest(request: PreparePublishRequest) {
     const sessionId = ++publishSessionGenerationRef.current;
     dispatchWorkflow({ type: "publishPreviewRequested", sessionId, request });
     dispatchWorkflow({ type: "operationStarted" });
@@ -749,7 +764,13 @@ function App() {
       const refreshedStates = await loadTargets(true);
       if (result.success && refreshedStates) {
         clearSelectionOverrides(
-          request.modelIds.map((id) => `${request.gatewayId}::${id}`),
+          models
+            .filter((model) =>
+              request.sources.some(
+                (source) => source.gatewayId === model.gatewayId,
+              ),
+            )
+            .map((model) => model.key),
         );
       }
     } catch (caught) {
@@ -898,11 +919,13 @@ function App() {
         <CommandBar
           gateway={selectedGateway}
           modelCount={gatewayModels.length}
-          selectedModelCount={selectedModelCount}
+          selectedModelCount={globalModelCount}
+          selectedSourceCount={publishSources.length}
+          hasPublishSelection={publishSources.length > 0}
           selectedTargetCount={selectedTargets.length}
           view={compactView}
           refreshing={selectedGatewayRefreshing}
-          busy={busy}
+          busy={busy || refreshingGatewayIds.size > 0}
           t={t}
           onNavigate={setCompactView}
           onBack={() =>
@@ -943,6 +966,12 @@ function App() {
           inert={installingUpdate}
         >
           <GatewaySidebar
+            selectedCounts={Object.fromEntries(
+              publishSources.map((source) => [
+                source.gatewayId,
+                source.modelIds.length,
+              ]),
+            )}
             currentVersion={currentVersion}
             gateways={gateways}
             selectedId={selectedGatewayId}
@@ -1001,7 +1030,8 @@ function App() {
           <InspectorPanel
             key={`${activeModel?.key ?? "none"}-${activeModel?.updatedAt ?? "none"}-${inspectorRevision}`}
             model={activeModel}
-            selectedCount={selectedModelCount}
+            selectedCount={globalModelCount}
+            selectedSourceCount={publishSources.length}
             targets={targets}
             selectedTargets={selectedTargets}
             busy={busy || selectedGatewayRefreshing}
@@ -1093,6 +1123,27 @@ function App() {
             errorNotice={dialogErrorNotice("probe")}
             onClose={() => setProbeDialog(false)}
             onConfirm={() => void runProbe()}
+          />
+        ) : null}
+        {sourceChoiceRequest ? (
+          <PublishSourcesDialog
+            conflicts={findPublishSourceConflicts(
+              sourceChoiceRequest.sources,
+              gateways,
+            )}
+            t={t}
+            onClose={() => setSourceChoiceRequest(null)}
+            onConfirm={(choices) => {
+              const request = {
+                ...sourceChoiceRequest,
+                sources: resolvePublishSources(
+                  sourceChoiceRequest.sources,
+                  choices,
+                ),
+              };
+              setSourceChoiceRequest(null);
+              void preparePublishRequest(request);
+            }}
           />
         ) : null}
         {publishDialog ? (

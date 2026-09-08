@@ -38,16 +38,22 @@ describe("workspace workflow", () => {
 
   it("owns the complete publish workflow", () => {
     const request: PreparePublishRequest = {
-      gatewayId: "gateway",
-      modelIds: ["model"],
+      sources: [{ gatewayId: "gateway", modelIds: ["model"] }],
       targets: ["workbuddy"],
     };
     const preview: PublishPreview = {
       targets: [],
       conflicts: [],
       warnings: [],
-      gatewayRevision: "gateway-revision",
-      credentialRevision: "credential-revision",
+      sourceRevisions: [
+        {
+          gatewayId: "gateway",
+          modelIds: ["model"],
+          gatewayRevision: "gateway-revision",
+          credentialRevision: "credential-revision",
+        },
+      ],
+      sources: [],
       modelRevisions: [],
     };
     let state = workspaceWorkflowReducer(initialWorkspaceWorkflow, {
@@ -99,8 +105,7 @@ describe("workspace workflow", () => {
 
   it("ignores a publish preview that arrives after the dialog closes", () => {
     const request: PreparePublishRequest = {
-      gatewayId: "gateway",
-      modelIds: ["model"],
+      sources: [{ gatewayId: "gateway", modelIds: ["model"] }],
       targets: ["workbuddy"],
     };
     let state = workspaceWorkflowReducer(initialWorkspaceWorkflow, {
@@ -116,8 +121,15 @@ describe("workspace workflow", () => {
         targets: [],
         conflicts: [],
         warnings: [],
-        gatewayRevision: "gateway-revision",
-        credentialRevision: "credential-revision",
+        sourceRevisions: [
+          {
+            gatewayId: "gateway",
+            modelIds: ["model"],
+            gatewayRevision: "gateway-revision",
+            credentialRevision: "credential-revision",
+          },
+        ],
+        sources: [],
         modelRevisions: [],
       },
     });
@@ -128,8 +140,7 @@ describe("workspace workflow", () => {
 
   it("rejects a preview from an older publish session", () => {
     const request: PreparePublishRequest = {
-      gatewayId: "gateway",
-      modelIds: ["model"],
+      sources: [{ gatewayId: "gateway", modelIds: ["model"] }],
       targets: ["workbuddy"],
     };
     let state = workspaceWorkflowReducer(initialWorkspaceWorkflow, {
@@ -140,7 +151,10 @@ describe("workspace workflow", () => {
     state = workspaceWorkflowReducer(state, {
       type: "publishPreviewRequested",
       sessionId: 2,
-      request: { ...request, modelIds: ["new-model"] },
+      request: {
+        ...request,
+        sources: [{ gatewayId: "gateway", modelIds: ["new-model"] }],
+      },
     });
     state = workspaceWorkflowReducer(state, {
       type: "publishPreviewLoaded",
@@ -149,8 +163,15 @@ describe("workspace workflow", () => {
         targets: [],
         conflicts: [],
         warnings: [],
-        gatewayRevision: "stale",
-        credentialRevision: "stale",
+        sourceRevisions: [
+          {
+            gatewayId: "gateway",
+            modelIds: ["model"],
+            gatewayRevision: "stale",
+            credentialRevision: "stale",
+          },
+        ],
+        sources: [],
         modelRevisions: [],
       },
     });
@@ -159,7 +180,9 @@ describe("workspace workflow", () => {
       publishPhase: "previewing",
       publishSessionId: 2,
       publishPreview: null,
-      publishRequest: { modelIds: ["new-model"] },
+      publishRequest: {
+        sources: [{ gatewayId: "gateway", modelIds: ["new-model"] }],
+      },
     });
   });
 });

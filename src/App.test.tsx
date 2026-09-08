@@ -381,7 +381,9 @@ describe("EveryBuddy workspace", () => {
 
     await waitFor(() => expect(preparePublish).toHaveBeenCalled());
     expect(preparePublish).toHaveBeenCalledWith(
-      expect.objectContaining({ modelIds: ["gpt-5.6"] }),
+      expect.objectContaining({
+        sources: [{ gatewayId: "demo-gateway", modelIds: ["gpt-5.6"] }],
+      }),
     );
   });
 

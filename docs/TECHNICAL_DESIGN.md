@@ -248,16 +248,20 @@ WorkBuddy 与 CodeBuddy 的默认路径不同，但共用 `model_config` 和 `Co
 
 ## 9. 发布事务
 
-1. Preview 读取目标配置，记录配置路径、symlink 解析后的实际写入路径、Fingerprint、API Profile revision、credential revision 和模型 revision，并计算新增、更新、不变和模型 ID 冲突。Credential revision 是根据 SQLite Token、API Base URL 和 source identity key 计算的 keyed digest，不包含明文 Token。
+发布范围是所有 API 来源中已勾选的模型，与当前浏览的 API 无关。前端通过 `sources: [{ gatewayId, modelIds }]` 提交计划；明确取消选择的来源保留在计划中，`modelIds: []` 表示移除该来源的已管理模型。未参与来源的其他 Model ID 保持不变。
+
+同一 Model ID 勾选了多个来源时，先显示来源选择 Dialog，要求用户逐项选择一个来源，不预选或按来源顺序覆盖。选择取消时保留原勾选状态；选择完成后使用唯一来源生成预览。Backend 独立拒绝重复 Gateway scope 和跨来源重复 Model ID。模型 ID 保持上游实际值，不添加 alias 或代理层。
+
+1. Preview 一次读取所有参与来源和目标配置，记录配置路径、symlink 解析后的实际写入路径、Fingerprint、每个 API 的 Profile revision、credential revision、所选 Model ID 和全部已管理模型 revision，并计算新增、更新、不变和模型 ID 冲突。Credential revision 是根据 SQLite Token、API Base URL 和 source identity key 计算的 keyed digest，不包含明文 Token。Preview 同时返回各来源名称和实际发布的 Model ID，供用户核对。
 2. 用户确认目标、明文 Token 提示和冲突替换。
-3. Execute 重新读取 SQLite 中的 Gateway、Token、模型和 Target 设置，并比较 Preview 中的全部 revision、路径和 Fingerprint。
+3. Execute 重新读取 SQLite 中所有参与来源的 Gateway、Token、模型和 Target 设置，并比较 Preview 中的来源选择、全部 revision、路径和 Fingerprint。所有来源的模型先合并为每个 Target 的一份完整输出，不循环执行单来源发布。
 4. API、Token、模型或路径不一致时返回 `CONFLICT_ERROR`；文件内容不一致时返回 `DRIFT_ERROR`。两种错误都不写文件。
 5. 检查合并后的模型总数和序列化后的字节数，仍须满足 10,000 个模型和 8 MiB 上限。对所有已存在的目标分别创建备份，再将全部写入计划保存到 SQLite journal。
 6. 每个目标写入前再次读取文件；内容与 Execute 阶段快照不一致时返回 `DRIFT_ERROR`，保留外部修改。
 7. 在目标目录中写入临时文件并执行原子替换。
 8. 重新读取文件，验证全部字节与已经通过 schema 和大小校验的预期输出一致。
 9. 任一目标失败时，按逆序恢复已经写入的目标；回滚只在文件仍等于本次发布输出时执行。文件已被外部修改时不覆盖，并报告回滚失败；本次新创建且未被修改的文件在回滚时移除。
-10. 所有文件校验成功后，在单个 SQLite transaction 中保存 `gateway_source_identities` 和两个 `target_states`，同时清除 journal。状态 transaction 失败时，来源身份不会残留，并按相同条件恢复所有已写入的目标文件。
+10. 所有文件校验成功后，在单个 SQLite transaction 中保存所有参与来源的 `gateway_source_identities` 和两个 `target_states`，同时清除 journal。任一来源的状态保存失败时，来源身份不会部分残留，并按相同条件恢复所有已写入的目标文件。
 11. 每个 Target 返回独立的 Success、Failure、Rolled Back 和 Rollback Failed 状态。
 
 跨两个文件系统操作不存在单一原子提交。EveryBuddy 使用 Preview Fingerprint、写前二次检查、目标内原子替换和条件式补偿回滚实现可恢复的一致性。外部进程仍可在最后一次检查与原子替换之间修改文件，因此发布前备份和逐目标结果始终保留。

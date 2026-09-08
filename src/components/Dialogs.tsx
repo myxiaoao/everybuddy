@@ -436,6 +436,25 @@ export function PublishDialog({
             <AlertTriangle aria-hidden="true" size={19} />
             <p>{t("publishTokenWarning")}</p>
           </div>
+          <div className="publish-source-summary">
+            <h3>{t("publishSourcesSummary")}</h3>
+            {preview.sources.map((source) => (
+              <section key={source.gatewayId}>
+                <strong>{source.gatewayName}</strong>
+                {source.modelIds.length ? (
+                  <ul>
+                    {source.modelIds.map((id) => (
+                      <li key={id}>
+                        <code>{id}</code>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>{t("publishSourceEmpty")}</p>
+                )}
+              </section>
+            ))}
+          </div>
           <div className="preview-targets">
             {preview.targets.map((target) => (
               <section key={target.target}>
@@ -476,6 +495,15 @@ export function PublishDialog({
                   <li key={`${conflict.target}-${conflict.modelId}`}>
                     <code>{conflict.modelId}</code>
                     <span>{displayTarget(conflict.target)}</span>
+                    <span>
+                      {t("publishReplacementSource", {
+                        existing: conflict.existingName,
+                        source:
+                          preview.sources.find((source) =>
+                            source.modelIds.includes(conflict.modelId),
+                          )?.gatewayName ?? "",
+                      })}
+                    </span>
                   </li>
                 ))}
               </ul>

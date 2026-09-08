@@ -322,9 +322,32 @@ pub struct TargetImportReport {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparePublishRequest {
+    pub sources: Vec<PublishSourceSelection>,
+    pub targets: Vec<TargetKind>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishSourceSelection {
     pub gateway_id: String,
     pub model_ids: Vec<String>,
-    pub targets: Vec<TargetKind>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishSourceRevision {
+    pub gateway_id: String,
+    pub model_ids: Vec<String>,
+    pub gateway_revision: String,
+    pub credential_revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishSourceSummary {
+    pub gateway_id: String,
+    pub gateway_name: String,
+    pub model_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -339,12 +362,10 @@ pub struct TargetExpectation {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecutePublishRequest {
-    pub gateway_id: String,
-    pub model_ids: Vec<String>,
+    pub sources: Vec<PublishSourceSelection>,
     pub targets: Vec<TargetKind>,
     pub expectations: Vec<TargetExpectation>,
-    pub gateway_revision: String,
-    pub credential_revision: String,
+    pub source_revisions: Vec<PublishSourceRevision>,
     pub model_revisions: Vec<ModelRevision>,
     pub accept_conflicts: bool,
 }
@@ -383,8 +404,8 @@ pub struct PublishPreview {
     pub targets: Vec<TargetPreview>,
     pub conflicts: Vec<ModelConflict>,
     pub warnings: Vec<String>,
-    pub gateway_revision: String,
-    pub credential_revision: String,
+    pub source_revisions: Vec<PublishSourceRevision>,
+    pub sources: Vec<PublishSourceSummary>,
     pub model_revisions: Vec<ModelRevision>,
 }
 

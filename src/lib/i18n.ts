@@ -3,6 +3,17 @@ import type { Language } from "../types";
 const messages = {
   "zh-CN": {
     appName: "EveryBuddy",
+    currentSourceSelection: "当前来源已选 {count} 个",
+    choosePublishSources: "选择同名模型的发布来源",
+    publishSourceConflictHint:
+      "{count} 个 Model ID 同时选中了多个 API 来源。每个 Model ID 只能发布一个来源，请逐项选择；其他同名项本次不发布。",
+    continuePublishPreview: "继续预览",
+    globalPublishSelection:
+      "全局发布：{sources} 个来源、{models} 个 Model ID；每个 ID 只使用一个来源。",
+    publishSourceCount: "{count} 个来源",
+    publishSourcesSummary: "本次发布来源与模型",
+    publishSourceEmpty: "该来源本次不发布模型；已管理配置将按预览移除或替换。",
+    publishReplacementSource: "现有配置：{existing}；本次使用来源：{source}",
     appTagline: "第三方模型配置",
     gateways: "API 来源",
     addGateway: "添加 API",
@@ -156,7 +167,7 @@ const messages = {
     updates: "更新 {count}",
     unchanged: "不变 {count}",
     conflicts: "模型 ID 冲突",
-    acceptConflicts: "我确认使用当前 API 来源替换这些模型",
+    acceptConflicts: "我确认使用以上所选来源替换这些同名模型",
     confirmPublish: "发布到 {count} 个目标",
     published: "模型配置已写入",
     importSucceeded: "已从目标配置导入 {gateways} 个 API 和 {models} 个模型。",
@@ -313,6 +324,18 @@ const messages = {
   },
   en: {
     appName: "EveryBuddy",
+    currentSourceSelection: "{count} selected in this source",
+    choosePublishSources: "Choose a source for duplicate models",
+    publishSourceConflictHint:
+      "{count} Model IDs are selected from multiple API sources. Choose one source for each ID. Other entries with the same ID will not be published.",
+    continuePublishPreview: "Continue to preview",
+    globalPublishSelection:
+      "Publish across {sources} sources and {models} Model IDs, using one source per ID.",
+    publishSourceCount: "{count} sources",
+    publishSourcesSummary: "Sources and models in this publish",
+    publishSourceEmpty:
+      "No models will be published from this source. Its managed entries will be removed or replaced as shown in the preview.",
+    publishReplacementSource: "Existing: {existing}; publish using: {source}",
     appTagline: "Third-party model configuration",
     gateways: "API sources",
     addGateway: "Add API",
@@ -477,7 +500,7 @@ const messages = {
     unchanged: "Unchanged {count}",
     conflicts: "Model ID conflicts",
     acceptConflicts:
-      "I confirm replacing these models with the current API source",
+      "I confirm replacing these models using the sources selected above",
     confirmPublish: "Publish to {count} targets",
     published: "Model configuration written",
     importSucceeded:

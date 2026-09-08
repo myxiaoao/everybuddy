@@ -106,6 +106,7 @@ impl Store {
         Ok((profile, token))
     }
 
+    #[cfg(test)]
     pub fn gateway_token(&self, id: &str) -> CoreResult<String> {
         self.optional_gateway_token(id)?
             .ok_or_else(missing_credential_error)
@@ -470,18 +471,19 @@ impl Store {
 
     pub fn save_publish_state(
         &self,
-        gateway_id: &str,
-        source_hashes: &[String],
+        sources: &[(String, Vec<String>)],
         updates: &[TargetStateUpdate],
     ) -> CoreResult<()> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        for source_hash in source_hashes {
-            transaction.execute(
-                "INSERT OR IGNORE INTO gateway_source_identities (gateway_id, source_hash)
+        for (gateway_id, source_hashes) in sources {
+            for source_hash in source_hashes {
+                transaction.execute(
+                    "INSERT OR IGNORE INTO gateway_source_identities (gateway_id, source_hash)
                  VALUES (?1, ?2)",
-                params![gateway_id, source_hash],
-            )?;
+                    params![gateway_id, source_hash],
+                )?;
+            }
         }
         save_target_state_updates(&transaction, updates)?;
         transaction.execute("DELETE FROM pending_file_writes", [])?;

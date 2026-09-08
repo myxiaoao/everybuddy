@@ -25,6 +25,7 @@ interface GatewaySidebarProps {
   currentVersion: string;
   gateways: GatewayProfile[];
   selectedId: string | null;
+  selectedCounts?: Record<string, number>;
   disabled: boolean;
   refreshingIds: ReadonlySet<string>;
   connectionStates: Record<string, GatewayConnectionState>;
@@ -42,6 +43,7 @@ export function GatewaySidebar({
   currentVersion,
   gateways,
   selectedId,
+  selectedCounts = {},
   disabled,
   refreshingIds,
   connectionStates,
@@ -122,6 +124,13 @@ export function GatewaySidebar({
                     />
                     <span>
                       <strong>{gateway.name}</strong>
+                      {(selectedCounts[gateway.id] ?? 0) > 0 ? (
+                        <small>
+                          {t("selectedCount", {
+                            count: selectedCounts[gateway.id],
+                          })}
+                        </small>
+                      ) : null}
                       <small>{gateway.apiRoot}</small>
                     </span>
                     <ChevronRight aria-hidden="true" size={16} />

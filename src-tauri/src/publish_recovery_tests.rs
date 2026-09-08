@@ -11,8 +11,7 @@ fn rejects_final_model_count_before_backup_or_write() {
     fs::write(&path, &original).unwrap();
     let request = fixture.request(vec![TargetKind::Workbuddy]);
     let preview = PreparePublishRequest {
-        gateway_id: request.gateway_id.clone(),
-        model_ids: request.model_ids.clone(),
+        sources: request.sources.clone(),
         targets: request.targets.clone(),
     };
     assert!(fixture

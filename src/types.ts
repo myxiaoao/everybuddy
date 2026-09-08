@@ -154,10 +154,23 @@ export interface BootstrapData {
   settings: AppSettings;
 }
 
-export interface PreparePublishRequest {
+export interface PublishSourceSelection {
   gatewayId: string;
   modelIds: string[];
+}
+
+export interface PreparePublishRequest {
+  sources: PublishSourceSelection[];
   targets: TargetKind[];
+}
+
+export interface PublishSourceRevision extends PublishSourceSelection {
+  gatewayRevision: string;
+  credentialRevision: string;
+}
+
+export interface PublishSourceSummary extends PublishSourceSelection {
+  gatewayName: string;
 }
 
 export interface TargetPreview {
@@ -181,8 +194,8 @@ export interface PublishPreview {
   targets: TargetPreview[];
   conflicts: ModelConflict[];
   warnings: string[];
-  gatewayRevision: string;
-  credentialRevision: string;
+  sourceRevisions: PublishSourceRevision[];
+  sources: PublishSourceSummary[];
   modelRevisions: Array<{ key: string; updatedAt: string }>;
 }
 

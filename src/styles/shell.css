@@ -19,6 +19,17 @@
   -webkit-app-region: drag;
 }
 
+.command-primary__sources {
+  font-size: var(--text-caption);
+  font-weight: 400;
+}
+
+@media (max-width: 980px) {
+  .command-primary__sources {
+    display: none;
+  }
+}
+
 .command-bar button {
   -webkit-app-region: no-drag;
 }

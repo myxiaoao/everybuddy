@@ -306,11 +306,16 @@ impl ConfigDocument {
             .iter()
             .filter_map(|model| model.get("id").and_then(Value::as_str))
             .collect();
-        let managed_identities: HashMap<_, _> = managed
+        let mut managed_identities: HashMap<_, Vec<_>> = HashMap::new();
+        for identity in managed
             .iter()
             .filter_map(crate::target_codec::model_identity)
-            .map(|identity| (identity.key.clone(), identity))
-            .collect();
+        {
+            managed_identities
+                .entry(identity.key.clone())
+                .or_default()
+                .push(identity);
+        }
         let mut remove_count = 0;
 
         match self.schema {
@@ -331,7 +336,11 @@ impl ConfigDocument {
                 && crate::target_codec::model_identity(model).is_some_and(|identity| {
                     managed_identities
                         .get(&identity.key)
-                        .is_some_and(|managed| identity.belongs_to(managed))
+                        .is_some_and(|managed| {
+                            managed
+                                .iter()
+                                .any(|candidate| identity.belongs_to(candidate))
+                        })
                 });
             if should_remove {
                 remove_count += 1;
