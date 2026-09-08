@@ -5,6 +5,7 @@ mod error;
 mod file_permissions;
 mod gateway;
 mod gateway_service;
+mod input_limits;
 mod market_catalog;
 mod model_lifecycle;
 mod models;

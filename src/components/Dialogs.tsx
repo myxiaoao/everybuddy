@@ -356,6 +356,7 @@ export function ProbeDialog({
 export function PublishDialog({
   open,
   busy,
+  publishing = false,
   preview,
   result,
   t,
@@ -363,6 +364,7 @@ export function PublishDialog({
   onClose,
   onConfirm,
 }: CommonDialogProps & {
+  publishing?: boolean;
   preview: PublishPreview | null;
   result: PublishResult | null;
   onConfirm: (acceptConflicts: boolean) => void;
@@ -386,6 +388,7 @@ export function PublishDialog({
       errorNotice={errorNotice}
       onClose={onClose}
       size="large"
+      dismissible={!publishing}
       footer={
         result ? (
           <Button type="button" onClick={onClose}>
@@ -393,7 +396,12 @@ export function PublishDialog({
           </Button>
         ) : (
           <>
-            <Button variant="secondary" type="button" onClick={onClose}>
+            <Button
+              variant="secondary"
+              type="button"
+              onClick={onClose}
+              disabled={publishing}
+            >
               {t("cancel")}
             </Button>
             <Button
@@ -501,6 +509,8 @@ export function SettingsDialog({
   availableVersion,
   updateCheckStatus,
   installingUpdate,
+  restartRequired = false,
+  updateBlocked = false,
   t,
   errorNotice,
   onClose,
@@ -513,6 +523,8 @@ export function SettingsDialog({
   availableVersion: string | null;
   updateCheckStatus: UpdateCheckStatus;
   installingUpdate: boolean;
+  restartRequired?: boolean;
+  updateBlocked?: boolean;
   onSubmit: (settings: AppSettings) => void;
   onCheckForUpdates: () => void;
   onInstallUpdate: () => void;
@@ -621,7 +633,11 @@ export function SettingsDialog({
                 size="sm"
                 type="button"
                 onClick={onCheckForUpdates}
-                disabled={updateCheckStatus === "checking" || installingUpdate}
+                disabled={
+                  updateCheckStatus === "checking" ||
+                  installingUpdate ||
+                  restartRequired
+                }
               >
                 <RefreshCw
                   className={updateCheckStatus === "checking" ? "spin" : ""}
@@ -639,7 +655,7 @@ export function SettingsDialog({
                   size="sm"
                   type="button"
                   onClick={onInstallUpdate}
-                  disabled={installingUpdate}
+                  disabled={busy || installingUpdate || updateBlocked}
                 >
                   {installingUpdate ? (
                     <LoaderCircle
@@ -648,7 +664,7 @@ export function SettingsDialog({
                       size={16}
                     />
                   ) : null}
-                  {t("updateAndRestart")}
+                  {t(restartRequired ? "restartApp" : "updateAndRestart")}
                 </Button>
               ) : null}
             </div>
@@ -703,10 +719,14 @@ export function BackupsDialog({
   errorNotice,
   onClose,
   onRestore,
+  stale = false,
+  onRefresh,
 }: CommonDialogProps & {
   backups: BackupRecord[];
   locale: string;
   onRestore: (backup: BackupRecord) => void;
+  stale?: boolean;
+  onRefresh?: () => void;
 }) {
   return (
     <Modal
@@ -722,6 +742,14 @@ export function BackupsDialog({
         </Button>
       }
     >
+      {stale ? (
+        <p role="status">
+          {t("backupsRefreshFailed")}{" "}
+          <Button variant="secondary" onClick={onRefresh} disabled={busy}>
+            {t("retry")}
+          </Button>
+        </p>
+      ) : null}
       {backups.length ? (
         <div className="backup-list">
           {backups.map((backup) => (

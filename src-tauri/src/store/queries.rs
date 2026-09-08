@@ -103,6 +103,7 @@ pub(super) fn model_versions(
 }
 
 pub(super) fn insert_model(connection: &Connection, model: &ManagedModel) -> CoreResult<()> {
+    crate::input_limits::model(model)?;
     connection.execute(
         r#"INSERT INTO models
            (model_key, gateway_id, upstream_id, name, vendor, capabilities_json,
@@ -136,6 +137,7 @@ pub(super) fn insert_missing_model(
     connection: &Connection,
     model: &ManagedModel,
 ) -> CoreResult<()> {
+    crate::input_limits::model(model)?;
     connection.execute(
         r#"INSERT OR IGNORE INTO models
            (model_key, gateway_id, upstream_id, name, vendor, capabilities_json,

@@ -102,6 +102,7 @@ function importIssueLabel(
 ) {
   const labels = {
     targetReadFailed: "importIssueTargetReadFailed",
+    invalidTargetPath: "importIssueInvalidTargetPath",
     missingModelId: "importIssueMissingModelId",
     missingUrl: "importIssueMissingUrl",
     invalidUrl: "importIssueInvalidUrl",
@@ -112,6 +113,9 @@ function importIssueLabel(
     ambiguousGateway: "importIssueAmbiguousGateway",
     targetConflict: "importIssueTargetConflict",
     modelConflict: "importIssueModelConflict",
+    interruptedWriteRecovered: "interruptedWriteRecovered",
+    interruptedWriteChanged: "interruptedWriteChanged",
+    interruptedWriteFailed: "interruptedWriteFailed",
   } as const;
   return t(labels[code as keyof typeof labels] ?? "importIssueUnknown");
 }

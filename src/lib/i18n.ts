@@ -169,6 +169,8 @@ const messages = {
     hideImportDetails: "收起详情",
     dismissImportNotice: "关闭启动导入摘要",
     importIssueTargetReadFailed: "配置文件无法读取或解析。",
+    importIssueInvalidTargetPath:
+      "配置路径不可用。请在设置中检查并重新保存绝对路径。",
     importIssueMissingModelId: "缺少 Model ID。",
     importIssueMissingUrl: "缺少 API URL。",
     importIssueInvalidUrl: "API URL 无效。",
@@ -292,6 +294,22 @@ const messages = {
     vendor: "提供商",
     updateAvailable: "EveryBuddy {version} 已可用",
     updateAndRestart: "更新并重启",
+    restartApp: "重启应用",
+    interruptedWriteRecovered:
+      "上次配置写入被中断，已恢复写入前的文件。请重新预览并发布。",
+    interruptedWriteChanged:
+      "写入中断后配置被其他程序修改，已保留外部更改。请检查配置，必要时从备份恢复。",
+    interruptedWriteFailed:
+      "上次中断的写入暂时无法恢复。请检查目标路径和权限，然后重新打开应用。",
+    updateRestartRequired: "更新已安装。请重启应用以完成更新。",
+    retry: "重试",
+    retryOpenRouter: "重新查询 OpenRouter",
+    openRouterChecking: "正在查询 OpenRouter 模型目录",
+    openRouterLookupFailed: "暂时无法查询 OpenRouter。请检查网络后重试。",
+    targetsStale:
+      "目标状态暂时无法刷新，当前显示上次读取的配置。正在自动重试。",
+    targetStateUnknown: "状态待确认",
+    backupsRefreshFailed: "配置已恢复，但备份列表刷新失败。请重新加载列表。",
   },
   en: {
     appName: "EveryBuddy",
@@ -476,6 +494,8 @@ const messages = {
     importIssueTargetReadFailed:
       "The configuration file could not be read or parsed.",
     importIssueMissingModelId: "The Model ID is missing.",
+    importIssueInvalidTargetPath:
+      "The configuration path is unavailable. Check and save an absolute path in Settings.",
     importIssueMissingUrl: "The API URL is missing.",
     importIssueInvalidUrl: "The API URL is invalid.",
     importIssueMissingToken: "The token is missing.",
@@ -630,6 +650,25 @@ const messages = {
     vendor: "Vendor",
     updateAvailable: "EveryBuddy {version} is available",
     updateAndRestart: "Update and restart",
+    restartApp: "Restart app",
+    interruptedWriteRecovered:
+      "An interrupted write was rolled back. Preview and publish again.",
+    interruptedWriteChanged:
+      "Configuration changed externally after an interrupted write. External changes were preserved. Check the file or restore a backup.",
+    interruptedWriteFailed:
+      "An interrupted write could not be recovered. Check target paths and permissions, then reopen the app.",
+    updateRestartRequired:
+      "The update is installed. Restart the app to finish updating.",
+    retry: "Retry",
+    retryOpenRouter: "Retry OpenRouter lookup",
+    openRouterChecking: "Checking the OpenRouter model catalog",
+    openRouterLookupFailed:
+      "OpenRouter is temporarily unavailable. Check your connection and retry.",
+    targetsStale:
+      "Target status could not be refreshed. Showing the last snapshot and retrying automatically.",
+    targetStateUnknown: "Status unavailable",
+    backupsRefreshFailed:
+      "Configuration restored, but the backup list could not be refreshed. Reload the list.",
   },
 } as const;
 

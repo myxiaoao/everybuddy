@@ -16,8 +16,11 @@ use crate::{
     secrets::{MISSING_CREDENTIAL_MESSAGE, SOURCE_IDENTITY_KEY_SETTING},
 };
 
+mod file_writes;
 mod migration;
 mod queries;
+
+pub(crate) use file_writes::PendingFileWrite;
 
 use migration::SCHEMA_VERSION;
 use queries::{
@@ -59,6 +62,7 @@ impl Store {
         }
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
+        connection.pragma_update(None, "synchronous", "FULL")?;
         connection.busy_timeout(Duration::from_secs(5))?;
         migration::migrate(&mut connection, path, current_version, database_existed)?;
         secure_database_files(path)?;
@@ -297,7 +301,11 @@ impl Store {
         query_models(&connection, Some(gateway_id))
     }
 
-    pub fn import_missing_serialized<T, F>(&self, operation: F) -> CoreResult<T>
+    pub fn import_missing_serialized<T, F>(
+        &self,
+        operation: F,
+        verify_source: impl FnOnce() -> CoreResult<()>,
+    ) -> CoreResult<T>
     where
         F: FnOnce(
             Vec<(GatewayProfile, Option<String>)>,
@@ -345,6 +353,7 @@ impl Store {
         for model in &new_models {
             insert_missing_model(&transaction, model)?;
         }
+        verify_source()?;
         transaction.commit()?;
         Ok(result)
     }
@@ -454,6 +463,7 @@ impl Store {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         save_target_state_updates(&transaction, updates)?;
+        transaction.execute("DELETE FROM pending_file_writes", [])?;
         transaction.commit()?;
         Ok(())
     }
@@ -474,6 +484,7 @@ impl Store {
             )?;
         }
         save_target_state_updates(&transaction, updates)?;
+        transaction.execute("DELETE FROM pending_file_writes", [])?;
         transaction.commit()?;
         Ok(())
     }
@@ -540,6 +551,19 @@ impl Store {
     pub fn remove_backup_record(&self, id: &str) -> CoreResult<()> {
         self.connection()?
             .execute("DELETE FROM backups WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    pub(crate) fn retire_backup(&self, backup: &BackupRecord) -> CoreResult<()> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        transaction.execute("DELETE FROM backups WHERE id = ?1", [&backup.id])?;
+        match std::fs::remove_file(&backup.path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        transaction.commit()?;
         Ok(())
     }
 
@@ -694,6 +718,10 @@ fn query_gateways_with_tokens(
 }
 
 fn upsert_gateway_profile(connection: &Connection, profile: &GatewayProfile) -> CoreResult<()> {
+    use crate::input_limits::{text, ID_BYTES, NAME_BYTES, URL_BYTES};
+    text(&profile.id, ID_BYTES, "API source ID")?;
+    text(&profile.name, NAME_BYTES, "API source name")?;
+    text(&profile.api_root, URL_BYTES, "API URL")?;
     connection.execute(
         r#"INSERT INTO gateway_profiles
            (id, name, api_root, token_ref, created_at, updated_at)
@@ -719,6 +747,7 @@ fn upsert_gateway_credential(
     token: &str,
 ) -> CoreResult<()> {
     let token = token.trim();
+    crate::input_limits::text(token, crate::input_limits::TOKEN_BYTES, "API token")?;
     if token.is_empty() {
         return Err(CoreError::Validation("API token is required".to_string()));
     }
@@ -1199,19 +1228,22 @@ mod tests {
         };
 
         let error = store
-            .import_missing_serialized(|_, _, _, _| {
-                Ok::<_, CoreError>((
-                    (),
-                    vec![(
-                        profile,
-                        "secret-token".to_string(),
-                        "source-hash".to_string(),
-                    )],
-                    Vec::new(),
-                    Vec::new(),
-                    vec![invalid_model],
-                ))
-            })
+            .import_missing_serialized(
+                |_, _, _, _| {
+                    Ok::<_, CoreError>((
+                        (),
+                        vec![(
+                            profile,
+                            "secret-token".to_string(),
+                            "source-hash".to_string(),
+                        )],
+                        Vec::new(),
+                        Vec::new(),
+                        vec![invalid_model],
+                    ))
+                },
+                || Ok(()),
+            )
             .unwrap_err();
 
         assert!(matches!(error, CoreError::Storage(_)));

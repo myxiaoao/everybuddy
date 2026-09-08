@@ -20,6 +20,7 @@ interface ModalProps {
   size?: "small" | "medium" | "large";
   closeLabel: string;
   onClose: () => void;
+  dismissible?: boolean;
 }
 
 const widths = {
@@ -66,6 +67,7 @@ export function Modal({
   size = "medium",
   closeLabel,
   onClose,
+  dismissible = true,
 }: ModalProps) {
   const [focusTargets] = useState(() => {
     const active =
@@ -107,12 +109,19 @@ export function Modal({
     <Dialog
       open={open}
       onOpenChange={(nextOpen) => {
-        if (!nextOpen) onClose();
+        if (!nextOpen && dismissible) onClose();
       }}
     >
       <DialogContent
         className={cn(widths[size], "modal-shell gap-0")}
         closeLabel={closeLabel}
+        showCloseButton={dismissible}
+        onEscapeKeyDown={(event) => {
+          if (!dismissible) event.preventDefault();
+        }}
+        onPointerDownOutside={(event) => {
+          if (!dismissible) event.preventDefault();
+        }}
         onCloseAutoFocus={(event) => {
           if (!restoreFocus()) return;
           event.preventDefault();

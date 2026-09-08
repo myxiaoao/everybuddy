@@ -155,9 +155,11 @@ describe("EveryBuddy workspace", () => {
       name: "从 OpenRouter 设置",
     });
     await waitFor(() => expect(unavailableButton).toBeDisabled());
-    expect(unavailableButton).toHaveAttribute(
-      "title",
-      "未在 OpenRouter 模型目录中匹配到此模型",
+    await waitFor(() =>
+      expect(unavailableButton).toHaveAttribute(
+        "title",
+        "未在 OpenRouter 模型目录中匹配到此模型",
+      ),
     );
   });
 

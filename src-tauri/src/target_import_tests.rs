@@ -35,6 +35,64 @@ fn target_paths(directory: &Path) -> HashMap<TargetKind, String> {
 }
 
 #[test]
+fn source_change_before_import_commit_rolls_back_credentials() {
+    let directory = tempdir().unwrap();
+    let store = Store::open(&directory.path().join("everybuddy.db")).unwrap();
+    let paths = target_paths(directory.path());
+    let work = &paths[&TargetKind::Workbuddy];
+    std::fs::write(work, b"[]").unwrap();
+    let inspections = crate::target::target_inspections(&store, &paths).unwrap();
+    let result = store.import_missing_serialized(
+        |_, _, _, _| {
+            let profile = GatewayProfile {
+                id: "stale".into(),
+                name: "Stale".into(),
+                api_root: "https://example.com/v1".into(),
+                created_at: "now".into(),
+                updated_at: "now".into(),
+            };
+            std::fs::write(work, b"[{\"id\":\"external\"}]").unwrap();
+            Ok((
+                (),
+                vec![(profile, "stale-secret".into(), "source".into())],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ))
+        },
+        || super::verify_import_sources(&inspections),
+    );
+    assert!(matches!(result, Err(crate::error::CoreError::Drift(_))));
+    assert!(store.list_gateways().unwrap().is_empty());
+    assert!(store.optional_gateway_token("stale").unwrap().is_none());
+}
+
+#[test]
+fn legacy_relative_path_is_reported_without_blocking_bootstrap() {
+    let directory = tempdir().unwrap();
+    let store = Store::open(&directory.path().join("everybuddy.db")).unwrap();
+    let mut paths = target_paths(directory.path());
+    paths.insert(TargetKind::Workbuddy, "relative/models.json".into());
+    let result = TargetImportService::new(&store, &paths)
+        .bootstrap_import()
+        .unwrap();
+    assert!(result
+        .report
+        .issues
+        .iter()
+        .any(|issue| issue.code == "invalidTargetPath"));
+    assert!(
+        !result
+            .targets
+            .iter()
+            .find(|target| target.kind == TargetKind::Workbuddy)
+            .unwrap()
+            .writable
+    );
+    assert!(store.list_gateways().unwrap().is_empty());
+}
+
+#[test]
 fn concurrent_bootstrap_imports_one_gateway() {
     let directory = tempdir().unwrap();
     let paths = Arc::new(target_paths(directory.path()));

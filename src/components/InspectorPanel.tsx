@@ -47,6 +47,9 @@ interface InspectorPanelProps {
   applyingOpenRouter: boolean;
   openRouterAvailable: boolean;
   checkingOpenRouter: boolean;
+  openRouterUnavailable?: boolean;
+  onRetryOpenRouter?: () => void;
+  targetsStale?: boolean;
   onToggleTarget: (target: TargetKind) => void;
   onDirtyChange: (modelKey: string | null, changed: boolean) => void;
 }
@@ -64,6 +67,9 @@ export function InspectorPanel({
   applyingOpenRouter,
   openRouterAvailable,
   checkingOpenRouter,
+  openRouterUnavailable,
+  onRetryOpenRouter,
+  targetsStale,
   onToggleTarget,
   onDirtyChange,
 }: InspectorPanelProps) {
@@ -130,12 +136,22 @@ export function InspectorPanel({
                 variant="secondary"
                 size="sm"
                 type="button"
-                onClick={onApplyOpenRouter}
-                disabled={busy || !openRouterAvailable}
+                onClick={
+                  openRouterUnavailable ? onRetryOpenRouter : onApplyOpenRouter
+                }
+                disabled={
+                  busy ||
+                  checkingOpenRouter ||
+                  (!openRouterAvailable && !openRouterUnavailable)
+                }
                 title={
-                  openRouterAvailable
-                    ? t("openRouterApplyHint")
-                    : t("openRouterUnavailable")
+                  openRouterUnavailable
+                    ? t("openRouterLookupFailed")
+                    : checkingOpenRouter
+                      ? t("openRouterChecking")
+                      : openRouterAvailable
+                        ? t("openRouterApplyHint")
+                        : t("openRouterUnavailable")
                 }
               >
                 {applyingOpenRouter || checkingOpenRouter ? (
@@ -143,7 +159,9 @@ export function InspectorPanel({
                 ) : (
                   <CloudDownload aria-hidden="true" size={16} />
                 )}
-                {t("applyOpenRouter")}
+                {t(
+                  openRouterUnavailable ? "retryOpenRouter" : "applyOpenRouter",
+                )}
               </Button>
               <Button
                 variant="secondary"
@@ -161,6 +179,9 @@ export function InspectorPanel({
                 {t("probe")}
               </Button>
             </div>
+            {openRouterUnavailable ? (
+              <p role="status">{t("openRouterLookupFailed")}</p>
+            ) : null}
             <div className="capability-list">
               <CapabilityToggle
                 icon={<Wrench />}
@@ -368,7 +389,9 @@ export function InspectorPanel({
                             : undefined
                         }
                       >
-                        {targetStatusLabel(target, t)}
+                        {targetsStale
+                          ? t("targetStateUnknown")
+                          : targetStatusLabel(target, t)}
                       </small>
                       <code title={target.path}>{target.path}</code>
                     </span>

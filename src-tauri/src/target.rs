@@ -75,13 +75,27 @@ pub fn target_path(kind: TargetKind, paths: &HashMap<TargetKind, String>) -> Cor
     let raw = paths.get(&kind).ok_or_else(|| {
         CoreError::Target(format!("{} path is not configured", kind.display_name()))
     })?;
-    expand_home(raw)
+    let path = expand_home(raw)?;
+    if !path.is_absolute() {
+        return Err(CoreError::Target("Saved target paths must be absolute; save an absolute path in Settings before continuing".into()));
+    }
+    Ok(path)
+}
+
+pub fn absolute_input_path(raw: &str) -> CoreResult<PathBuf> {
+    let path = expand_home(raw)?;
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(std::env::current_dir()?.join(path))
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct TargetInspection {
     pub status: TargetStatus,
     pub document: Option<ConfigDocument>,
+    pub write_path: Option<PathBuf>,
 }
 
 pub fn target_inspections(
@@ -92,8 +106,26 @@ pub fn target_inspections(
         .into_iter()
         .map(|adapter| {
             let kind = adapter.kind();
-            let path = target_path(kind, paths)?;
-            target_inspection(store, kind, &path)
+            match target_path(kind, paths) {
+                Ok(path) => target_inspection(store, kind, &path),
+                Err(error) if paths.contains_key(&kind) => Ok(TargetInspection {
+                    status: TargetStatus {
+                        kind,
+                        display_name: kind.display_name().into(),
+                        path: paths[&kind].clone(),
+                        installed: false,
+                        file_exists: false,
+                        writable: false,
+                        schema: TargetSchema::Invalid,
+                        fingerprint: None,
+                        drifted: false,
+                        error: Some(error.to_string()),
+                    },
+                    document: None,
+                    write_path: None,
+                }),
+                Err(error) => Err(error),
+            }
         })
         .collect()
 }
@@ -103,6 +135,7 @@ fn target_inspection(store: &Store, kind: TargetKind, path: &Path) -> CoreResult
     let file_exists = path.exists();
     let installed = fs::symlink_metadata(path).is_ok() || parent_exists;
     let write_path = target_write_path(path);
+    let resolved_path = write_path.as_ref().ok().cloned();
     let writable = write_path.as_deref().is_ok_and(is_writable);
     let mut schema = TargetSchema::Missing;
     let mut fingerprint_value = None;
@@ -149,6 +182,7 @@ fn target_inspection(store: &Store, kind: TargetKind, path: &Path) -> CoreResult
             error,
         },
         document,
+        write_path: resolved_path,
     })
 }
 
@@ -333,7 +367,23 @@ impl ConfigDocument {
         let mut bytes = serde_json::to_vec_pretty(&self.root)
             .map_err(|error| CoreError::Target(error.to_string()))?;
         bytes.push(b'\n');
+        // Validate the final document, including preserved fields and pretty-print expansion.
+        Self::parse(&bytes)?;
         Ok(bytes)
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn saved_relative_paths_are_rejected_until_resaved_as_absolute() {
+        let paths = HashMap::from([(TargetKind::Workbuddy, "relative/models.json".into())]);
+        assert!(target_path(TargetKind::Workbuddy, &paths).is_err());
+        let normalized = absolute_input_path("relative/models.json").unwrap();
+        assert!(normalized.is_absolute());
+        assert!(normalized.ends_with("relative/models.json"));
     }
 }
 
@@ -380,6 +430,12 @@ pub fn fingerprint(bytes: &[u8]) -> String {
 
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> CoreResult<()> {
     let write_path = target_write_path(path)?;
+    atomic_write_resolved(&write_path, bytes)
+}
+
+pub(crate) fn atomic_write_resolved(path: &Path, bytes: &[u8]) -> CoreResult<()> {
+    // Commit to the directory entry that the caller inspected; never follow a replacement link.
+    let write_path = path;
     let parent = write_path
         .parent()
         .ok_or_else(|| CoreError::Target("Target path has no parent directory".to_string()))?;
@@ -395,7 +451,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> CoreResult<()> {
         options.mode(0o600);
     }
 
-    AtomicFile::new(&write_path, OverwriteBehavior::AllowOverwrite)
+    AtomicFile::new(write_path, OverwriteBehavior::AllowOverwrite)
         .write_with_options(
             |file| -> std::io::Result<()> {
                 file.write_all(bytes)?;

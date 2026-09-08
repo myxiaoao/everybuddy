@@ -75,6 +75,8 @@ describe("workspace workflow", () => {
       sessionId: 1,
     });
     expect(state.publishPhase).toBe("publishing");
+    state = workspaceWorkflowReducer(state, { type: "publishClosed" });
+    expect(state.publishPhase).toBe("publishing");
 
     state = workspaceWorkflowReducer(state, {
       type: "publishExecutionFinished",

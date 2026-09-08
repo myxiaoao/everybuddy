@@ -40,8 +40,8 @@ export const api = {
     call<ManagedModel>("add_manual_model", { input }),
   probeModel: (modelKey: string) =>
     call<ProbeSummary>("probe_model", { modelKey }),
-  getOpenRouterModelMatch: (modelKey: string) =>
-    call<string | null>("get_openrouter_model_match", { modelKey }),
+  getOpenRouterModelMatch: (modelKey: string, retry = false) =>
+    call<string | null>("get_openrouter_model_match", { modelKey, retry }),
   applyOpenRouterModel: (modelKey: string) =>
     call<ManagedModel>("apply_openrouter_model", { modelKey }),
   updateModel: (input: ModelUpdateInput) => {

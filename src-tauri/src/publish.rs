@@ -18,7 +18,7 @@ use crate::{
         ModelRevision, PreparePublishRequest, PublishPreview, PublishResult, TargetKind,
         TargetPreview, TargetPublishResult,
     },
-    store::{Store, TargetStateUpdate},
+    store::{PendingFileWrite as PreparedTarget, Store, TargetStateUpdate},
     target::{
         atomic_write, fingerprint, read_target_file, target_path, target_write_path, ConfigDocument,
     },
@@ -35,11 +35,53 @@ pub struct PublishCoordinator<'a> {
 }
 
 impl PublishCoordinator<'_> {
+    pub fn recover_interrupted(&self) -> CoreResult<Vec<crate::models::TargetImportIssue>> {
+        let mut issues = Vec::new();
+        for target in self.store.pending_file_writes()? {
+            let outcome = rollback_target(&target);
+            let code = match &outcome {
+                Ok(()) => "interruptedWriteRecovered",
+                Err(CoreError::Drift(_)) => "interruptedWriteChanged",
+                Err(_) => "interruptedWriteFailed",
+            };
+            if outcome.is_ok() || matches!(outcome, Err(CoreError::Drift(_))) {
+                self.store.clear_file_write(target.kind)?;
+            }
+            issues.push(crate::models::TargetImportIssue {
+                target: target.kind,
+                model_id: None,
+                code: code.into(),
+                message: match outcome {
+                    Ok(()) => "An interrupted configuration write was rolled back".into(),
+                    Err(error) => error.to_string(),
+                },
+            });
+        }
+        self.reconcile_backups()?;
+        Ok(issues)
+    }
+
+    fn forget_restored_writes(&self) {
+        let Ok(pending) = self.store.pending_file_writes() else {
+            return;
+        };
+        for target in pending {
+            if crate::conditional_write::current_bytes(&target.write_path)
+                .is_ok_and(|current| current == target.original)
+            {
+                if let Err(error) = self.store.clear_file_write(target.kind) {
+                    log::warn!("Could not clear completed file recovery: {error}");
+                }
+            }
+        }
+    }
+
     pub fn preview(
         &self,
         request: &PreparePublishRequest,
         target_paths: &HashMap<TargetKind, String>,
     ) -> CoreResult<PublishPreview> {
+        self.store.ensure_no_pending_file_writes()?;
         validate_request(&request.gateway_id, &request.model_ids, &request.targets)?;
         let snapshot = PublishSnapshot::load(self, &request.gateway_id, &request.model_ids)?;
         let mut targets = Vec::new();
@@ -57,6 +99,7 @@ impl PublishCoordinator<'_> {
                 },
             ));
             let summary = document.sync(&snapshot.incoming, &snapshot.managed);
+            document.to_bytes()?;
             targets.push(TargetPreview {
                 target: *kind,
                 path: path.to_string_lossy().to_string(),
@@ -87,6 +130,7 @@ impl PublishCoordinator<'_> {
         request: &ExecutePublishRequest,
         target_paths: &HashMap<TargetKind, String>,
     ) -> CoreResult<PublishResult> {
+        self.store.ensure_no_pending_file_writes()?;
         validate_request(&request.gateway_id, &request.model_ids, &request.targets)?;
         let snapshot = PublishSnapshot::load(self, &request.gateway_id, &request.model_ids)?;
         validate_resource_revisions(
@@ -174,6 +218,8 @@ impl PublishCoordinator<'_> {
             }
         }
 
+        self.store.begin_file_writes(&prepared)?;
+
         let mut committed: Vec<&PreparedTarget> = Vec::new();
         let mut verified_hashes = HashMap::new();
         let mut results = Vec::new();
@@ -197,6 +243,7 @@ impl PublishCoordinator<'_> {
                         },
                     });
                     rollback_committed(&committed, &mut results, "a target write failed");
+                    self.forget_restored_writes();
                     return Ok(PublishResult {
                         success: false,
                         results,
@@ -240,6 +287,7 @@ impl PublishCoordinator<'_> {
                 &mut results,
                 "the local publish state could not be saved",
             );
+            self.forget_restored_writes();
             return Ok(PublishResult {
                 success: false,
                 results,
@@ -252,10 +300,29 @@ impl PublishCoordinator<'_> {
         })
     }
 
-    pub fn restore(&self, backup_id: &str) -> CoreResult<()> {
+    pub fn restore(
+        &self,
+        backup_id: &str,
+        target_paths: &HashMap<TargetKind, String>,
+    ) -> CoreResult<()> {
         let backup = self.store.backup(backup_id)?;
+        self.store.ensure_no_pending_file_writes()?;
         let backup_path = PathBuf::from(&backup.path);
         let source_path = PathBuf::from(&backup.source_path);
+        let configured_path = target_path(backup.target, target_paths)?;
+        let current_path = target_write_path(&configured_path)?;
+        if current_path != source_path
+            || target_paths.keys().any(|kind| {
+                *kind != backup.target
+                    && target_path(*kind, target_paths)
+                        .and_then(|path| target_write_path(&path))
+                        .is_ok_and(|path| path == current_path)
+            })
+        {
+            return Err(CoreError::Conflict(
+                "The backup destination no longer belongs to this target; check configuration paths before restoring".into(),
+            ));
+        }
         let bytes = read_target_file(&backup_path)?;
         if fingerprint(&bytes) != backup.fingerprint {
             return Err(CoreError::Conflict(
@@ -270,28 +337,35 @@ impl PublishCoordinator<'_> {
         if let Some(current) = original.as_deref() {
             self.create_backup(backup.target, &source_path, current)?;
         }
-        let verified = replace_exact(
-            &source_path,
-            original.as_deref(),
-            &bytes,
-            backup.target.display_name(),
-        )?;
-        let hash = verified.fingerprint;
+        let restored = PreparedTarget {
+            kind: backup.target,
+            configured_path: configured_path.clone(),
+            write_path: source_path,
+            original,
+            output: bytes,
+        };
+        self.store
+            .begin_file_writes(std::slice::from_ref(&restored))?;
+        let hash = match write_and_verify(&restored) {
+            Ok(hash) => hash,
+            Err(error) => {
+                if !matches!(error, CoreError::Drift(_)) {
+                    let _ = rollback_target(&restored);
+                }
+                self.forget_restored_writes();
+                return Err(error);
+            }
+        };
         if let Err(error) = self.store.save_target_state(
             backup.target,
-            &backup.source_path,
+            &configured_path.to_string_lossy(),
             Some(&hash),
             Some(&hash),
             "restored",
         ) {
-            let restored = PreparedTarget {
-                kind: backup.target,
-                configured_path: source_path.clone(),
-                write_path: source_path,
-                original,
-                output: bytes,
-            };
-            return match rollback_target(&restored) {
+            let rollback = rollback_target(&restored);
+            self.forget_restored_writes();
+            return match rollback {
                 Ok(()) => Err(error),
                 Err(_) => Err(CoreError::Storage(
                     "Could not save restore state, and file recovery also failed".to_string(),
@@ -312,7 +386,6 @@ impl PublishCoordinator<'_> {
         let id = Uuid::new_v4().to_string();
         let timestamp = Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
         let backup_path = directory.join(format!("{timestamp}-{id}.json"));
-        atomic_write(&backup_path, bytes)?;
         let backup = BackupRecord {
             id,
             target,
@@ -321,15 +394,19 @@ impl PublishCoordinator<'_> {
             fingerprint: fingerprint(bytes),
             created_at: Utc::now().to_rfc3339(),
         };
-        if let Err(error) = self.store.add_backup(&backup) {
-            return match fs::remove_file(&backup_path) {
+        self.store.add_backup(&backup)?;
+        if let Err(error) = atomic_write(&backup_path, bytes) {
+            return match self.store.remove_backup_record(&backup.id) {
                 Ok(()) => Err(error),
                 Err(_) => Err(CoreError::Storage(
-                    "Could not record the backup, and backup file cleanup also failed".to_string(),
+                    "Could not write the backup, and its pending record could not be removed"
+                        .to_string(),
                 )),
             };
         }
-        self.prune_backups(target)?;
+        if let Err(error) = self.prune_backups(target) {
+            log::warn!("Backup created; retention cleanup will be retried: {error}");
+        }
         Ok(backup)
     }
 
@@ -340,18 +417,20 @@ impl PublishCoordinator<'_> {
             .into_iter()
             .skip(BACKUP_RETENTION)
         {
-            let path = PathBuf::from(&backup.path);
-            self.store.remove_backup_record(&backup.id)?;
-            if path.exists() {
-                if let Err(error) = fs::remove_file(&path) {
-                    return match self.store.add_backup(&backup) {
-                        Ok(()) => Err(CoreError::Storage(error.to_string())),
-                        Err(_) => Err(CoreError::Storage(
-                            "Could not remove an expired backup, and its database record could not be restored"
-                                .to_string(),
-                        )),
-                    };
-                }
+            self.store.retire_backup(&backup)?;
+        }
+        Ok(())
+    }
+
+    fn reconcile_backups(&self) -> CoreResult<()> {
+        for backup in self.store.list_backups(None)? {
+            if !Path::new(&backup.path).try_exists()? {
+                self.store.remove_backup_record(&backup.id)?;
+            }
+        }
+        for kind in [TargetKind::Workbuddy, TargetKind::Codebuddy] {
+            if let Err(error) = self.prune_backups(kind) {
+                log::warn!("Could not prune expired backups: {error}");
             }
         }
         Ok(())
@@ -386,15 +465,6 @@ fn validate_resource_revisions(
         ));
     }
     Ok(())
-}
-
-#[derive(Debug)]
-struct PreparedTarget {
-    kind: TargetKind,
-    configured_path: PathBuf,
-    write_path: PathBuf,
-    original: Option<Vec<u8>>,
-    output: Vec<u8>,
 }
 
 struct PublishSnapshot {
@@ -616,6 +686,8 @@ mod tests {
 
     use super::*;
     use crate::models::{CapabilitySet, GatewayProfile, ManagedModel, TargetExpectation};
+
+    include!("publish_recovery_tests.rs");
 
     struct Fixture {
         directory: TempDir,
@@ -1256,7 +1328,10 @@ mod tests {
             .find(|backup| fingerprint(original) == backup.fingerprint)
             .unwrap();
 
-        fixture.coordinator().restore(&backup.id).unwrap();
+        fixture
+            .coordinator()
+            .restore(&backup.id, &fixture.paths)
+            .unwrap();
 
         assert_eq!(fs::read(path).unwrap(), original);
     }
@@ -1293,7 +1368,10 @@ mod tests {
             )
             .unwrap();
 
-        let error = fixture.coordinator().restore(&backup.id).unwrap_err();
+        let error = fixture
+            .coordinator()
+            .restore(&backup.id, &fixture.paths)
+            .unwrap_err();
 
         assert!(matches!(error, CoreError::Storage(_)));
         assert_eq!(fs::read(path).unwrap(), published);
@@ -1358,15 +1436,15 @@ mod tests {
             )
             .unwrap();
 
-        let error = coordinator
+        let latest = coordinator
             .create_backup(TargetKind::Workbuddy, &path, b"[{\"id\":\"latest\"}]\n")
-            .unwrap_err();
+            .unwrap();
         let backups = fixture
             .store
             .list_backups(Some(TargetKind::Workbuddy))
             .unwrap();
 
-        assert!(matches!(error, CoreError::Storage(_)));
+        assert!(backups.iter().any(|backup| backup.id == latest.id));
         assert_eq!(backups.len(), BACKUP_RETENTION + 1);
         assert!(backups
             .iter()
@@ -1396,15 +1474,15 @@ mod tests {
         fs::remove_file(&oldest.path).unwrap();
         fs::create_dir(&oldest.path).unwrap();
 
-        let error = coordinator
+        let latest = coordinator
             .create_backup(TargetKind::Workbuddy, &path, b"[{\"id\":\"latest\"}]\n")
-            .unwrap_err();
+            .unwrap();
         let backups = fixture
             .store
             .list_backups(Some(TargetKind::Workbuddy))
             .unwrap();
 
-        assert!(matches!(error, CoreError::Storage(_)));
+        assert!(backups.iter().any(|backup| backup.id == latest.id));
         assert!(backups.iter().any(|backup| backup.id == oldest.id));
     }
 

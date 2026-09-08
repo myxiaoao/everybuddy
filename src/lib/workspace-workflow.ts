@@ -111,7 +111,9 @@ export function workspaceWorkflowReducer(
         ? { ...state, publishPhase: "ready" }
         : state;
     case "publishClosed":
-      return closePublishWorkflow(state);
+      return state.publishPhase === "publishing"
+        ? state
+        : closePublishWorkflow(state);
   }
 }
 
