@@ -67,6 +67,7 @@
   );
   --color-border-subtle: var(--border);
   --color-border-strong: var(--input);
+  --color-control-border: var(--muted-foreground);
   --color-accent-solid: var(--primary);
   --color-accent-hover: color-mix(
     in oklab,

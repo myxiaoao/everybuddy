@@ -15,14 +15,16 @@ use crate::{
     gateway_service::gateway_source_hash,
     models::{
         BackupRecord, ExecutePublishRequest, GatewayProfile, ManagedModel, ModelConflict,
-        ModelRevision, PreparePublishRequest, PublishPreview, PublishResult, TargetKind,
-        TargetPreview, TargetPublishResult,
+        ModelRevision, PreparePublishRequest, PublishPreview, PublishResult, PublishSourceRevision,
+        PublishSourceSelection, PublishSourceSummary, TargetKind, TargetPreview,
+        TargetPublishResult,
     },
-    store::{Store, TargetStateUpdate},
+    store::{PendingFileWrite as PreparedTarget, Store, TargetStateUpdate},
     target::{
         atomic_write, fingerprint, read_target_file, target_path, target_write_path, ConfigDocument,
     },
     target_codec::encode_model as model_config,
+    target_import::remove_unmatched_models,
 };
 
 const BACKUP_RETENTION: usize = 10;
@@ -35,13 +37,55 @@ pub struct PublishCoordinator<'a> {
 }
 
 impl PublishCoordinator<'_> {
+    pub fn recover_interrupted(&self) -> CoreResult<Vec<crate::models::TargetImportIssue>> {
+        let mut issues = Vec::new();
+        for target in self.store.pending_file_writes()? {
+            let outcome = rollback_target(&target);
+            let code = match &outcome {
+                Ok(()) => "interruptedWriteRecovered",
+                Err(CoreError::Drift(_)) => "interruptedWriteChanged",
+                Err(_) => "interruptedWriteFailed",
+            };
+            if outcome.is_ok() || matches!(outcome, Err(CoreError::Drift(_))) {
+                self.store.clear_file_write(target.kind)?;
+            }
+            issues.push(crate::models::TargetImportIssue {
+                target: target.kind,
+                model_id: None,
+                code: code.into(),
+                message: match outcome {
+                    Ok(()) => "An interrupted configuration write was rolled back".into(),
+                    Err(error) => error.to_string(),
+                },
+            });
+        }
+        self.reconcile_backups()?;
+        Ok(issues)
+    }
+
+    fn forget_restored_writes(&self) {
+        let Ok(pending) = self.store.pending_file_writes() else {
+            return;
+        };
+        for target in pending {
+            if crate::conditional_write::current_bytes(&target.write_path)
+                .is_ok_and(|current| current == target.original)
+            {
+                if let Err(error) = self.store.clear_file_write(target.kind) {
+                    log::warn!("Could not clear completed file recovery: {error}");
+                }
+            }
+        }
+    }
+
     pub fn preview(
         &self,
         request: &PreparePublishRequest,
         target_paths: &HashMap<TargetKind, String>,
     ) -> CoreResult<PublishPreview> {
-        validate_request(&request.gateway_id, &request.model_ids, &request.targets)?;
-        let snapshot = PublishSnapshot::load(self, &request.gateway_id, &request.model_ids)?;
+        self.store.ensure_no_pending_file_writes()?;
+        validate_request(&request.sources, &request.targets)?;
+        let snapshot = PublishSnapshot::load(self, &request.sources)?;
         let mut targets = Vec::new();
         let mut conflicts = Vec::new();
 
@@ -57,6 +101,7 @@ impl PublishCoordinator<'_> {
                 },
             ));
             let summary = document.sync(&snapshot.incoming, &snapshot.managed);
+            document.to_bytes()?;
             targets.push(TargetPreview {
                 target: *kind,
                 path: path.to_string_lossy().to_string(),
@@ -76,8 +121,8 @@ impl PublishCoordinator<'_> {
                 "WorkBuddy and CodeBuddy require the API token in their local models.json file."
                     .to_string(),
             ],
-            gateway_revision: snapshot.gateway.updated_at,
-            credential_revision: snapshot.credential_revision,
+            source_revisions: snapshot.source_revisions(),
+            sources: snapshot.summaries(),
             model_revisions: model_revisions(&snapshot.managed_models),
         })
     }
@@ -87,12 +132,12 @@ impl PublishCoordinator<'_> {
         request: &ExecutePublishRequest,
         target_paths: &HashMap<TargetKind, String>,
     ) -> CoreResult<PublishResult> {
-        validate_request(&request.gateway_id, &request.model_ids, &request.targets)?;
-        let snapshot = PublishSnapshot::load(self, &request.gateway_id, &request.model_ids)?;
+        self.store.ensure_no_pending_file_writes()?;
+        validate_request(&request.sources, &request.targets)?;
+        let snapshot = PublishSnapshot::load(self, &request.sources)?;
         validate_resource_revisions(
             request,
-            &snapshot.gateway.updated_at,
-            &snapshot.credential_revision,
+            &snapshot.source_revisions(),
             &snapshot.managed_models,
         )?;
         let source_hashes = snapshot.source_hashes();
@@ -156,16 +201,15 @@ impl PublishCoordinator<'_> {
             });
         }
 
-        let current_token = self.store.gateway_token(&snapshot.gateway.id)?;
-        let current_credential_revision = gateway_source_hash(
-            &snapshot.identity_key,
-            &snapshot.gateway.api_root,
-            &current_token,
-        );
-        if current_credential_revision != request.credential_revision {
-            return Err(CoreError::Conflict(
-                "The API credential changed after preview; create a new preview".to_string(),
-            ));
+        for source in &snapshot.sources {
+            let (gateway, token) = self.store.gateway_with_token(&source.gateway.id)?;
+            let revision = gateway_source_hash(&source.identity_key, &gateway.api_root, &token);
+            if gateway != source.gateway || revision != source.credential_revision {
+                return Err(CoreError::Conflict(
+                    "An API source or credential changed after preview; create a new preview"
+                        .into(),
+                ));
+            }
         }
 
         for target in &prepared {
@@ -173,6 +217,8 @@ impl PublishCoordinator<'_> {
                 self.create_backup(target.kind, &target.write_path, original)?;
             }
         }
+
+        self.store.begin_file_writes(&prepared)?;
 
         let mut committed: Vec<&PreparedTarget> = Vec::new();
         let mut verified_hashes = HashMap::new();
@@ -197,6 +243,7 @@ impl PublishCoordinator<'_> {
                         },
                     });
                     rollback_committed(&committed, &mut results, "a target write failed");
+                    self.forget_restored_writes();
                     return Ok(PublishResult {
                         success: false,
                         results,
@@ -232,7 +279,7 @@ impl PublishCoordinator<'_> {
             .collect();
         if self
             .store
-            .save_publish_state(&snapshot.gateway.id, &source_hashes, &state_updates)
+            .save_publish_state(&source_hashes, &state_updates)
             .is_err()
         {
             rollback_committed(
@@ -240,6 +287,7 @@ impl PublishCoordinator<'_> {
                 &mut results,
                 "the local publish state could not be saved",
             );
+            self.forget_restored_writes();
             return Ok(PublishResult {
                 success: false,
                 results,
@@ -252,10 +300,29 @@ impl PublishCoordinator<'_> {
         })
     }
 
-    pub fn restore(&self, backup_id: &str) -> CoreResult<()> {
+    pub fn restore(
+        &self,
+        backup_id: &str,
+        target_paths: &HashMap<TargetKind, String>,
+    ) -> CoreResult<()> {
         let backup = self.store.backup(backup_id)?;
+        self.store.ensure_no_pending_file_writes()?;
         let backup_path = PathBuf::from(&backup.path);
         let source_path = PathBuf::from(&backup.source_path);
+        let configured_path = target_path(backup.target, target_paths)?;
+        let current_path = target_write_path(&configured_path)?;
+        if current_path != source_path
+            || target_paths.keys().any(|kind| {
+                *kind != backup.target
+                    && target_path(*kind, target_paths)
+                        .and_then(|path| target_write_path(&path))
+                        .is_ok_and(|path| path == current_path)
+            })
+        {
+            return Err(CoreError::Conflict(
+                "The backup destination no longer belongs to this target; check configuration paths before restoring".into(),
+            ));
+        }
         let bytes = read_target_file(&backup_path)?;
         if fingerprint(&bytes) != backup.fingerprint {
             return Err(CoreError::Conflict(
@@ -270,28 +337,35 @@ impl PublishCoordinator<'_> {
         if let Some(current) = original.as_deref() {
             self.create_backup(backup.target, &source_path, current)?;
         }
-        let verified = replace_exact(
-            &source_path,
-            original.as_deref(),
-            &bytes,
-            backup.target.display_name(),
-        )?;
-        let hash = verified.fingerprint;
+        let restored = PreparedTarget {
+            kind: backup.target,
+            configured_path: configured_path.clone(),
+            write_path: source_path,
+            original,
+            output: bytes,
+        };
+        self.store
+            .begin_file_writes(std::slice::from_ref(&restored))?;
+        let hash = match write_and_verify(&restored) {
+            Ok(hash) => hash,
+            Err(error) => {
+                if !matches!(error, CoreError::Drift(_)) {
+                    let _ = rollback_target(&restored);
+                }
+                self.forget_restored_writes();
+                return Err(error);
+            }
+        };
         if let Err(error) = self.store.save_target_state(
             backup.target,
-            &backup.source_path,
+            &configured_path.to_string_lossy(),
             Some(&hash),
             Some(&hash),
             "restored",
         ) {
-            let restored = PreparedTarget {
-                kind: backup.target,
-                configured_path: source_path.clone(),
-                write_path: source_path,
-                original,
-                output: bytes,
-            };
-            return match rollback_target(&restored) {
+            let rollback = rollback_target(&restored);
+            self.forget_restored_writes();
+            return match rollback {
                 Ok(()) => Err(error),
                 Err(_) => Err(CoreError::Storage(
                     "Could not save restore state, and file recovery also failed".to_string(),
@@ -299,6 +373,61 @@ impl PublishCoordinator<'_> {
             };
         }
         Ok(())
+    }
+
+    pub fn cleanup_unmatched(
+        &self,
+        target: TargetKind,
+        target_paths: &HashMap<TargetKind, String>,
+    ) -> CoreResult<usize> {
+        self.store.ensure_no_pending_file_writes()?;
+        let configured_path = target_path(target, target_paths)?;
+        let write_path = target_write_path(&configured_path)?;
+        let (mut document, original) = ConfigDocument::read(&write_path)?;
+        let removed_count = remove_unmatched_models(self.store, target, &mut document)?;
+        if removed_count == 0 {
+            return Ok(0);
+        }
+        let output = document.to_bytes()?;
+        if let Some(original) = &original {
+            self.create_backup(target, &write_path, original)?;
+        }
+        let prepared = PreparedTarget {
+            kind: target,
+            configured_path: configured_path.clone(),
+            write_path,
+            original,
+            output,
+        };
+        self.store
+            .begin_file_writes(std::slice::from_ref(&prepared))?;
+        let hash = match write_and_verify(&prepared) {
+            Ok(hash) => hash,
+            Err(error) => {
+                if !matches!(error, CoreError::Drift(_)) {
+                    let _ = rollback_target(&prepared);
+                }
+                self.forget_restored_writes();
+                return Err(error);
+            }
+        };
+        if let Err(error) = self.store.save_target_state(
+            target,
+            &configured_path.to_string_lossy(),
+            Some(&hash),
+            Some(&hash),
+            "cleaned",
+        ) {
+            let rollback = rollback_target(&prepared);
+            self.forget_restored_writes();
+            return match rollback {
+                Ok(()) => Err(error),
+                Err(_) => Err(CoreError::Storage(
+                    "Could not save target cleanup state, and file recovery also failed".into(),
+                )),
+            };
+        }
+        Ok(removed_count)
     }
 
     fn create_backup(
@@ -312,7 +441,6 @@ impl PublishCoordinator<'_> {
         let id = Uuid::new_v4().to_string();
         let timestamp = Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
         let backup_path = directory.join(format!("{timestamp}-{id}.json"));
-        atomic_write(&backup_path, bytes)?;
         let backup = BackupRecord {
             id,
             target,
@@ -321,15 +449,19 @@ impl PublishCoordinator<'_> {
             fingerprint: fingerprint(bytes),
             created_at: Utc::now().to_rfc3339(),
         };
-        if let Err(error) = self.store.add_backup(&backup) {
-            return match fs::remove_file(&backup_path) {
+        self.store.add_backup(&backup)?;
+        if let Err(error) = atomic_write(&backup_path, bytes) {
+            return match self.store.remove_backup_record(&backup.id) {
                 Ok(()) => Err(error),
                 Err(_) => Err(CoreError::Storage(
-                    "Could not record the backup, and backup file cleanup also failed".to_string(),
+                    "Could not write the backup, and its pending record could not be removed"
+                        .to_string(),
                 )),
             };
         }
-        self.prune_backups(target)?;
+        if let Err(error) = self.prune_backups(target) {
+            log::warn!("Backup created; retention cleanup will be retried: {error}");
+        }
         Ok(backup)
     }
 
@@ -340,18 +472,20 @@ impl PublishCoordinator<'_> {
             .into_iter()
             .skip(BACKUP_RETENTION)
         {
-            let path = PathBuf::from(&backup.path);
-            self.store.remove_backup_record(&backup.id)?;
-            if path.exists() {
-                if let Err(error) = fs::remove_file(&path) {
-                    return match self.store.add_backup(&backup) {
-                        Ok(()) => Err(CoreError::Storage(error.to_string())),
-                        Err(_) => Err(CoreError::Storage(
-                            "Could not remove an expired backup, and its database record could not be restored"
-                                .to_string(),
-                        )),
-                    };
-                }
+            self.store.retire_backup(&backup)?;
+        }
+        Ok(())
+    }
+
+    fn reconcile_backups(&self) -> CoreResult<()> {
+        for backup in self.store.list_backups(None)? {
+            if !Path::new(&backup.path).try_exists()? {
+                self.store.remove_backup_record(&backup.id)?;
+            }
+        }
+        for kind in [TargetKind::Workbuddy, TargetKind::Codebuddy] {
+            if let Err(error) = self.prune_backups(kind) {
+                log::warn!("Could not prune expired backups: {error}");
             }
         }
         Ok(())
@@ -372,12 +506,10 @@ fn model_revisions(models: &[crate::models::ManagedModel]) -> Vec<ModelRevision>
 
 fn validate_resource_revisions(
     request: &ExecutePublishRequest,
-    gateway_revision: &str,
-    credential_revision: &str,
+    source_revisions: &[PublishSourceRevision],
     models: &[crate::models::ManagedModel],
 ) -> CoreResult<()> {
-    if request.gateway_revision != gateway_revision
-        || request.credential_revision != credential_revision
+    if request.source_revisions != source_revisions
         || request.model_revisions != model_revisions(models)
     {
         return Err(CoreError::Conflict(
@@ -388,16 +520,87 @@ fn validate_resource_revisions(
     Ok(())
 }
 
-#[derive(Debug)]
-struct PreparedTarget {
-    kind: TargetKind,
-    configured_path: PathBuf,
-    write_path: PathBuf,
-    original: Option<Vec<u8>>,
-    output: Vec<u8>,
+struct PublishSnapshot {
+    sources: Vec<PublishSourceSnapshot>,
+    managed_models: Vec<ManagedModel>,
+    incoming: Vec<Value>,
+    managed: Vec<Value>,
+    selected_ids: HashSet<String>,
 }
 
-struct PublishSnapshot {
+impl PublishSnapshot {
+    fn load(
+        coordinator: &PublishCoordinator<'_>,
+        selections: &[PublishSourceSelection],
+    ) -> CoreResult<Self> {
+        let mut sources = selections
+            .iter()
+            .map(|source| {
+                PublishSourceSnapshot::load(coordinator, &source.gateway_id, &source.model_ids)
+            })
+            .collect::<CoreResult<Vec<_>>>()?;
+        sources.sort_by(|a, b| a.gateway.id.cmp(&b.gateway.id));
+        Ok(Self {
+            managed_models: sources
+                .iter()
+                .flat_map(|source| source.managed_models.clone())
+                .collect(),
+            incoming: sources
+                .iter()
+                .flat_map(|source| source.incoming.clone())
+                .collect(),
+            managed: sources
+                .iter()
+                .flat_map(|source| source.managed.clone())
+                .collect(),
+            selected_ids: sources
+                .iter()
+                .flat_map(|source| source.selected_ids.clone())
+                .collect(),
+            sources,
+        })
+    }
+
+    fn source_revisions(&self) -> Vec<PublishSourceRevision> {
+        self.sources
+            .iter()
+            .map(|source| PublishSourceRevision {
+                gateway_id: source.gateway.id.clone(),
+                model_ids: {
+                    let mut ids: Vec<_> = source.selected_ids.iter().cloned().collect();
+                    ids.sort();
+                    ids
+                },
+                gateway_revision: source.gateway.updated_at.clone(),
+                credential_revision: source.credential_revision.clone(),
+            })
+            .collect()
+    }
+
+    fn source_hashes(&self) -> Vec<(String, Vec<String>)> {
+        self.sources
+            .iter()
+            .map(|source| (source.gateway.id.clone(), source.source_hashes()))
+            .collect()
+    }
+
+    fn summaries(&self) -> Vec<PublishSourceSummary> {
+        self.sources
+            .iter()
+            .map(|source| PublishSourceSummary {
+                gateway_id: source.gateway.id.clone(),
+                gateway_name: source.gateway.name.clone(),
+                model_ids: source
+                    .selected_models
+                    .iter()
+                    .map(|model| model.id.clone())
+                    .collect(),
+            })
+            .collect()
+    }
+}
+
+struct PublishSourceSnapshot {
     gateway: GatewayProfile,
     selected_models: Vec<ManagedModel>,
     managed_models: Vec<ManagedModel>,
@@ -409,7 +612,7 @@ struct PublishSnapshot {
     selected_ids: HashSet<String>,
 }
 
-impl PublishSnapshot {
+impl PublishSourceSnapshot {
     fn load(
         coordinator: &PublishCoordinator<'_>,
         gateway_id: &str,
@@ -463,19 +666,10 @@ impl PublishSnapshot {
     }
 }
 
-fn validate_request(
-    gateway_id: &str,
-    model_ids: &[String],
-    targets: &[TargetKind],
-) -> CoreResult<()> {
-    if gateway_id.trim().is_empty() || gateway_id.len() > MAX_PUBLISH_IDENTIFIER_BYTES {
+fn validate_request(sources: &[PublishSourceSelection], targets: &[TargetKind]) -> CoreResult<()> {
+    if sources.is_empty() || sources.len() > MAX_PUBLISH_MODELS {
         return Err(CoreError::Validation(
-            "The API source ID must be non-empty and no longer than 512 bytes".to_string(),
-        ));
-    }
-    if model_ids.is_empty() {
-        return Err(CoreError::Validation(
-            "Select at least one model to publish".to_string(),
+            "Select API sources to publish".to_string(),
         ));
     }
     if targets.is_empty() {
@@ -483,18 +677,11 @@ fn validate_request(
             "Select WorkBuddy, CodeBuddy, or both".to_string(),
         ));
     }
-    if model_ids.len() > MAX_PUBLISH_MODELS {
+    let model_count: usize = sources.iter().map(|source| source.model_ids.len()).sum();
+    if model_count > MAX_PUBLISH_MODELS {
         return Err(CoreError::Validation(format!(
             "A publish request can contain at most {MAX_PUBLISH_MODELS} models"
         )));
-    }
-    if model_ids
-        .iter()
-        .any(|id| id.trim().is_empty() || id.len() > MAX_PUBLISH_IDENTIFIER_BYTES)
-    {
-        return Err(CoreError::Validation(
-            "Model IDs must be non-empty and no longer than 512 bytes".to_string(),
-        ));
     }
     let unique_targets: HashSet<_> = targets.iter().collect();
     if unique_targets.len() != targets.len() {
@@ -502,11 +689,29 @@ fn validate_request(
             "A configuration target can only be selected once".to_string(),
         ));
     }
-    let unique_models: HashSet<_> = model_ids.iter().collect();
-    if unique_models.len() != model_ids.len() {
-        return Err(CoreError::Validation(
-            "A model can only be selected once".to_string(),
-        ));
+    let mut gateways = HashSet::new();
+    let mut model_ids = HashSet::new();
+    for source in sources {
+        if source.gateway_id.trim().is_empty()
+            || source.gateway_id.len() > MAX_PUBLISH_IDENTIFIER_BYTES
+            || !gateways.insert(&source.gateway_id)
+        {
+            return Err(CoreError::Validation(
+                "API source IDs must be unique, non-empty, and no longer than 512 bytes".into(),
+            ));
+        }
+        for id in &source.model_ids {
+            if id.trim().is_empty() || id.len() > MAX_PUBLISH_IDENTIFIER_BYTES {
+                return Err(CoreError::Validation(
+                    "Model IDs must be non-empty and no longer than 512 bytes".into(),
+                ));
+            }
+            if !model_ids.insert(id) {
+                return Err(CoreError::Conflict(
+                    "Select exactly one API source for each Model ID before publishing".into(),
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -617,6 +822,9 @@ mod tests {
     use super::*;
     use crate::models::{CapabilitySet, GatewayProfile, ManagedModel, TargetExpectation};
 
+    include!("publish_recovery_tests.rs");
+    include!("publish_sources_tests.rs");
+
     struct Fixture {
         directory: TempDir,
         store: Store,
@@ -708,12 +916,22 @@ mod tests {
             let token = self.store.gateway_token("gateway").unwrap();
             let identity_key = self.store.source_identity_key().unwrap();
             ExecutePublishRequest {
-                gateway_id: "gateway".to_string(),
-                model_ids: vec!["gpt-5".to_string()],
+                sources: vec![PublishSourceSelection {
+                    gateway_id: "gateway".into(),
+                    model_ids: vec!["gpt-5".into()],
+                }],
                 targets,
                 expectations,
-                gateway_revision: gateway.updated_at,
-                credential_revision: gateway_source_hash(&identity_key, &gateway.api_root, &token),
+                source_revisions: vec![PublishSourceRevision {
+                    gateway_id: gateway.id.clone(),
+                    model_ids: vec!["gpt-5".into()],
+                    gateway_revision: gateway.updated_at,
+                    credential_revision: gateway_source_hash(
+                        &identity_key,
+                        &gateway.api_root,
+                        &token,
+                    ),
+                }],
                 model_revisions: model_revisions(
                     &self.store.models_for_gateway("gateway").unwrap(),
                 ),
@@ -735,27 +953,26 @@ mod tests {
 
     #[test]
     fn rejects_empty_publish_selection() {
-        assert!(validate_request("gateway", &[], &[TargetKind::Workbuddy]).is_err());
-        assert!(validate_request("gateway", &["gpt-5".to_string()], &[]).is_err());
-        assert!(validate_request(
-            "gateway",
-            &["gpt-5".to_string(), "gpt-5".to_string()],
-            &[TargetKind::Workbuddy]
-        )
-        .is_err());
-        assert!(
-            validate_request("gateway", &["x".repeat(513)], &[TargetKind::Workbuddy],).is_err()
-        );
-        assert!(validate_request(
-            &"x".repeat(513),
-            &["gpt-5".to_string()],
-            &[TargetKind::Workbuddy],
-        )
-        .is_err());
-        let too_many_models: Vec<_> = (0..=MAX_PUBLISH_MODELS)
+        assert!(validate_request(&[], &[TargetKind::Workbuddy]).is_err());
+        let source = PublishSourceSelection {
+            gateway_id: "gateway".into(),
+            model_ids: vec!["gpt-5".into()],
+        };
+        assert!(validate_request(std::slice::from_ref(&source), &[]).is_err());
+        let mut invalid = source.clone();
+        invalid.model_ids.push("gpt-5".into());
+        assert!(validate_request(&[invalid], &[TargetKind::Workbuddy]).is_err());
+        let mut invalid = source.clone();
+        invalid.model_ids = vec!["x".repeat(513)];
+        assert!(validate_request(&[invalid], &[TargetKind::Workbuddy]).is_err());
+        let mut invalid = source.clone();
+        invalid.gateway_id = "x".repeat(513);
+        assert!(validate_request(&[invalid], &[TargetKind::Workbuddy]).is_err());
+        let mut invalid = source;
+        invalid.model_ids = (0..=MAX_PUBLISH_MODELS)
             .map(|index| format!("model-{index}"))
             .collect();
-        assert!(validate_request("gateway", &too_many_models, &[TargetKind::Workbuddy],).is_err());
+        assert!(validate_request(&[invalid], &[TargetKind::Workbuddy]).is_err());
     }
 
     #[test]
@@ -765,8 +982,10 @@ mod tests {
         model.configuration.temperature = Some(-0.1);
         fixture.store.save_model(&model).unwrap();
         let request = PreparePublishRequest {
-            gateway_id: "gateway".to_string(),
-            model_ids: vec!["gpt-5".to_string()],
+            sources: vec![PublishSourceSelection {
+                gateway_id: "gateway".into(),
+                model_ids: vec!["gpt-5".into()],
+            }],
             targets: vec![TargetKind::Workbuddy],
         };
 
@@ -787,8 +1006,10 @@ mod tests {
         model.configuration.reasoning.summary = Some(crate::models::ReasoningSummary::Never);
         fixture.store.save_model(&model).unwrap();
         let request = PreparePublishRequest {
-            gateway_id: "gateway".to_string(),
-            model_ids: vec!["gpt-5".to_string()],
+            sources: vec![PublishSourceSelection {
+                gateway_id: "gateway".into(),
+                model_ids: vec!["gpt-5".into()],
+            }],
             targets: vec![TargetKind::Workbuddy],
         };
 
@@ -809,8 +1030,10 @@ mod tests {
         model.configuration.endpoint_override = None;
         fixture.store.save_model(&model).unwrap();
         let request = PreparePublishRequest {
-            gateway_id: "gateway".to_string(),
-            model_ids: vec!["gpt-5".to_string()],
+            sources: vec![PublishSourceSelection {
+                gateway_id: "gateway".into(),
+                model_ids: vec!["gpt-5".into()],
+            }],
             targets: vec![TargetKind::Workbuddy],
         };
 
@@ -836,8 +1059,10 @@ mod tests {
         model.configuration.max_output_tokens = Some(4_096);
         fixture.store.save_model(&model).unwrap();
         let request = PreparePublishRequest {
-            gateway_id: "gateway".to_string(),
-            model_ids: vec!["gpt-5".to_string()],
+            sources: vec![PublishSourceSelection {
+                gateway_id: "gateway".into(),
+                model_ids: vec!["gpt-5".into()],
+            }],
             targets: vec![TargetKind::Workbuddy],
         };
 
@@ -860,8 +1085,10 @@ mod tests {
         });
         fixture.store.save_model(&model).unwrap();
         let request = PreparePublishRequest {
-            gateway_id: "gateway".to_string(),
-            model_ids: vec!["gpt-5".to_string()],
+            sources: vec![PublishSourceSelection {
+                gateway_id: "gateway".into(),
+                model_ids: vec!["gpt-5".into()],
+            }],
             targets: vec![TargetKind::Workbuddy],
         };
 
@@ -977,8 +1204,10 @@ mod tests {
             .coordinator()
             .preview(
                 &PreparePublishRequest {
-                    gateway_id: "gateway".to_string(),
-                    model_ids: vec!["gpt-5".to_string()],
+                    sources: vec![PublishSourceSelection {
+                        gateway_id: "gateway".into(),
+                        model_ids: vec!["gpt-5".into()],
+                    }],
                     targets: vec![TargetKind::Workbuddy, TargetKind::Codebuddy],
                 },
                 &fixture.paths,
@@ -1256,7 +1485,10 @@ mod tests {
             .find(|backup| fingerprint(original) == backup.fingerprint)
             .unwrap();
 
-        fixture.coordinator().restore(&backup.id).unwrap();
+        fixture
+            .coordinator()
+            .restore(&backup.id, &fixture.paths)
+            .unwrap();
 
         assert_eq!(fs::read(path).unwrap(), original);
     }
@@ -1293,7 +1525,10 @@ mod tests {
             )
             .unwrap();
 
-        let error = fixture.coordinator().restore(&backup.id).unwrap_err();
+        let error = fixture
+            .coordinator()
+            .restore(&backup.id, &fixture.paths)
+            .unwrap_err();
 
         assert!(matches!(error, CoreError::Storage(_)));
         assert_eq!(fs::read(path).unwrap(), published);
@@ -1358,15 +1593,15 @@ mod tests {
             )
             .unwrap();
 
-        let error = coordinator
+        let latest = coordinator
             .create_backup(TargetKind::Workbuddy, &path, b"[{\"id\":\"latest\"}]\n")
-            .unwrap_err();
+            .unwrap();
         let backups = fixture
             .store
             .list_backups(Some(TargetKind::Workbuddy))
             .unwrap();
 
-        assert!(matches!(error, CoreError::Storage(_)));
+        assert!(backups.iter().any(|backup| backup.id == latest.id));
         assert_eq!(backups.len(), BACKUP_RETENTION + 1);
         assert!(backups
             .iter()
@@ -1396,15 +1631,15 @@ mod tests {
         fs::remove_file(&oldest.path).unwrap();
         fs::create_dir(&oldest.path).unwrap();
 
-        let error = coordinator
+        let latest = coordinator
             .create_backup(TargetKind::Workbuddy, &path, b"[{\"id\":\"latest\"}]\n")
-            .unwrap_err();
+            .unwrap();
         let backups = fixture
             .store
             .list_backups(Some(TargetKind::Workbuddy))
             .unwrap();
 
-        assert!(matches!(error, CoreError::Storage(_)));
+        assert!(backups.iter().any(|backup| backup.id == latest.id));
         assert!(backups.iter().any(|backup| backup.id == oldest.id));
     }
 

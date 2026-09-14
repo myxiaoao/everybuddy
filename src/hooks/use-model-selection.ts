@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { deriveModelSelection } from "@/lib/model-selection";
+import { buildPublishSources } from "@/lib/publish-selection";
 import type { ManagedModel, TargetKind, TargetModelState } from "@/types";
 
 interface Options {
@@ -29,6 +30,14 @@ export function useModelSelection({
     [models, overrides, selectedTargets, targetModelStates],
   );
   const selectedKeys = selection.checkedKeys;
+  const publishSources = useMemo(
+    () => buildPublishSources(models, selectedKeys, overrides),
+    [models, selectedKeys, overrides],
+  );
+  const globalModelCount = useMemo(
+    () => new Set(publishSources.flatMap((source) => source.modelIds)).size,
+    [publishSources],
+  );
   const selectedModelCount = useMemo(
     () =>
       [...selectedKeys].filter((key) =>
@@ -82,6 +91,8 @@ export function useModelSelection({
     selection,
     selectedKeys,
     selectedModelCount,
+    globalModelCount,
+    publishSources,
     toggleAll,
     clearSelection,
     toggleModel,

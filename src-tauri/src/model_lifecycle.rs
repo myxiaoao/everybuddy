@@ -429,6 +429,7 @@ impl<'a> ModelLifecycle<'a> {
     }
 
     pub async fn add_manual(&self, input: ManualModelInput) -> CoreResult<ManagedModel> {
+        crate::input_limits::identity(&input.id, &input.name, &input.vendor)?;
         let id = input.id.trim().to_string();
         if id.is_empty() {
             return Err(CoreError::Validation("Model ID is required".to_string()));
@@ -524,19 +525,22 @@ impl<'a> ModelLifecycle<'a> {
         Ok(model)
     }
 
-    pub async fn openrouter_match(&self, model_key: String) -> CoreResult<Option<String>> {
+    pub async fn openrouter_match(
+        &self,
+        model_key: String,
+        retry: bool,
+    ) -> CoreResult<Option<String>> {
         let model = {
             let _mutation = self.lock_mutation()?;
             self.store.model(&model_key)?
         };
-        Ok(self
-            .gateway_client
-            .market_model(&model.id, &model.vendor)
+        self.gateway_client
+            .market_match(&model.id, &model.vendor, retry)
             .await
-            .map(|matched| matched.id))
     }
 
     pub fn update(&self, input: ModelUpdateInput) -> CoreResult<ManagedModel> {
+        crate::input_limits::identity("", &input.name, &input.vendor)?;
         let _mutation = self.lock_mutation()?;
         let mut model = self.store.model(&input.model_key)?;
         let name = input.name.trim();

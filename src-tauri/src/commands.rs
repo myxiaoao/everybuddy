@@ -13,7 +13,7 @@ use crate::{
         AppSettings, BackupRecord, BootstrapData, ExecutePublishRequest, GatewayInput,
         GatewayProfile, ManagedModel, ManualModelInput, ModelUpdateInput, PreparePublishRequest,
         ProbeSummary, PublishPreview, PublishResult, SaveGatewayResult, SaveSettingsInput,
-        TargetKind, TargetSnapshot,
+        TargetCleanupResult, TargetImportIssue, TargetKind, TargetSnapshot,
     },
     publish::PublishCoordinator,
     target::{default_target_paths, target_path, target_write_path},
@@ -26,13 +26,17 @@ type CommandResult<T> = Result<T, CommandError>;
 #[tauri::command]
 pub fn bootstrap(state: State<'_, AppState>) -> CommandResult<BootstrapData> {
     let _mutation = lock_app_mutation(state.inner())?;
+    let recovery_issues = coordinator(state.inner())
+        .recover_interrupted()
+        .map_err(CommandError::from)?;
     let settings = state
         .store
         .settings(default_target_paths().map_err(CommandError::from)?)
         .map_err(CommandError::from)?;
-    let import = TargetImportService::new(&state.store, &settings.target_paths)
+    let mut import = TargetImportService::new(&state.store, &settings.target_paths)
         .bootstrap_import()
         .map_err(CommandError::from)?;
+    import.report.issues.extend(recovery_issues);
     Ok(BootstrapData {
         gateways: state.store.list_gateways().map_err(CommandError::from)?,
         models: state.store.list_models().map_err(CommandError::from)?,
@@ -59,6 +63,8 @@ pub fn save_gateway(
 ) -> CommandResult<SaveGatewayResult> {
     let _mutation = lock_app_mutation(state.inner())?;
     let name = input.name.trim();
+    crate::input_limits::text(name, crate::input_limits::NAME_BYTES, "API source name")
+        .map_err(CommandError::from)?;
     if name.is_empty() {
         return Err(
             crate::error::CoreError::Validation("Gateway name is required".to_string()).into(),
@@ -148,10 +154,11 @@ pub async fn apply_openrouter_model(
 #[tauri::command]
 pub async fn get_openrouter_model_match(
     model_key: String,
+    retry: Option<bool>,
     state: State<'_, AppState>,
 ) -> CommandResult<Option<String>> {
     model_lifecycle(state.inner())
-        .openrouter_match(model_key)
+        .openrouter_match(model_key, retry.unwrap_or(false))
         .await
         .map_err(CommandError::from)
 }
@@ -168,6 +175,7 @@ pub fn update_model(
 
 #[tauri::command]
 pub fn get_target_snapshot(state: State<'_, AppState>) -> CommandResult<TargetSnapshot> {
+    let _mutation = lock_app_mutation(state.inner())?;
     let settings = state
         .store
         .settings(default_target_paths().map_err(CommandError::from)?)
@@ -210,20 +218,52 @@ pub fn list_backups(
     target: Option<TargetKind>,
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<BackupRecord>> {
+    let _mutation = lock_app_mutation(state.inner())?;
     state.store.list_backups(target).map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub fn restore_backup(id: String, state: State<'_, AppState>) -> CommandResult<()> {
     let _mutation = lock_app_mutation(state.inner())?;
+    let settings = state
+        .store
+        .settings(default_target_paths().map_err(CommandError::from)?)
+        .map_err(CommandError::from)?;
     coordinator(state.inner())
-        .restore(&id)
+        .restore(&id, &settings.target_paths)
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn cleanup_unmatched_models(
+    target: TargetKind,
+    state: State<'_, AppState>,
+) -> CommandResult<TargetCleanupResult> {
+    let _mutation = lock_app_mutation(state.inner())?;
+    let settings = state
+        .store
+        .settings(default_target_paths().map_err(CommandError::from)?)
+        .map_err(CommandError::from)?;
+    let removed_count = coordinator(state.inner())
+        .cleanup_unmatched(target, &settings.target_paths)
+        .map_err(CommandError::from)?;
+    Ok(TargetCleanupResult {
+        target,
+        removed_count,
+    })
+}
+
+#[tauri::command]
+pub fn recover_pending_writes(state: State<'_, AppState>) -> CommandResult<Vec<TargetImportIssue>> {
+    let _mutation = lock_app_mutation(state.inner())?;
+    coordinator(state.inner())
+        .recover_interrupted()
         .map_err(CommandError::from)
 }
 
 #[tauri::command]
 pub fn save_settings(
-    input: SaveSettingsInput,
+    mut input: SaveSettingsInput,
     state: State<'_, AppState>,
 ) -> CommandResult<AppSettings> {
     let _mutation = lock_app_mutation(state.inner())?;
@@ -237,6 +277,10 @@ pub fn save_settings(
         return Err(crate::error::CoreError::Validation("Unsupported theme".to_string()).into());
     }
     validate_selected_targets(&input.selected_targets).map_err(CommandError::from)?;
+    for path in input.target_paths.values() {
+        crate::input_limits::text(path.trim(), crate::input_limits::URL_BYTES, "Target path")
+            .map_err(CommandError::from)?;
+    }
     if input
         .target_paths
         .values()
@@ -246,6 +290,18 @@ pub fn save_settings(
             "Configuration target paths cannot be empty".to_string(),
         )
         .into());
+    }
+    for kind in [TargetKind::Workbuddy, TargetKind::Codebuddy] {
+        let raw = input.target_paths.get(&kind).ok_or_else(|| {
+            CommandError::from(crate::error::CoreError::Validation(
+                "Both target paths are required".into(),
+            ))
+        })?;
+        let raw = raw.trim();
+        let absolute = crate::target::absolute_input_path(raw).map_err(CommandError::from)?;
+        input
+            .target_paths
+            .insert(kind, absolute.to_string_lossy().into_owned());
     }
     validate_target_paths(&input.target_paths).map_err(CommandError::from)?;
     let settings = AppSettings {

@@ -56,6 +56,17 @@ impl DecodedTargetModel {
         raw: &Value,
         allow_custom_protocol: bool,
     ) -> Result<Self, TargetImportIssue> {
+        let size = serde_json::to_vec(raw)
+            .map(|bytes| bytes.len())
+            .unwrap_or(usize::MAX);
+        if size > crate::input_limits::MODEL_BYTES {
+            return Err(decode_issue(
+                target,
+                None,
+                "invalidParameters",
+                "Model entry exceeds 256 KiB; reduce its size before importing".into(),
+            ));
+        }
         let object = raw.as_object().ok_or_else(|| {
             decode_issue(
                 target,
@@ -90,6 +101,18 @@ impl DecodedTargetModel {
             model_ref.clone(),
             "missingToken",
         )?;
+        crate::input_limits::text(&token, crate::input_limits::TOKEN_BYTES, "API token")
+            .and_then(|()| {
+                crate::input_limits::text(&model_id, crate::input_limits::ID_BYTES, "Model ID")
+            })
+            .map_err(|error| {
+                decode_issue(
+                    target,
+                    model_ref.clone(),
+                    "invalidParameters",
+                    error.to_string(),
+                )
+            })?;
         let explicit_name = object
             .get("name")
             .and_then(Value::as_str)
@@ -100,6 +123,19 @@ impl DecodedTargetModel {
             .get("vendor")
             .and_then(Value::as_str)
             .and_then(market_catalog::normalize_vendor);
+        crate::input_limits::identity(
+            &model_id,
+            explicit_name.as_deref().unwrap_or(&model_id),
+            explicit_vendor.as_deref().unwrap_or("custom"),
+        )
+        .map_err(|error| {
+            decode_issue(
+                target,
+                model_ref.clone(),
+                "invalidParameters",
+                error.to_string(),
+            )
+        })?;
         let mut metadata = object_without_secret(raw);
         if value_contains_secret(&metadata, &token) {
             return Err(decode_issue(

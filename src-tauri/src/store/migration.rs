@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::error::{CoreError, CoreResult};
 
-pub(super) const SCHEMA_VERSION: i64 = 4;
+pub(super) const SCHEMA_VERSION: i64 = 5;
 
 pub(super) fn migrate(
     connection: &mut Connection,
@@ -82,6 +82,14 @@ pub(super) fn migrate(
             source_path TEXT NOT NULL,
             fingerprint TEXT NOT NULL,
             created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS pending_file_writes (
+            target TEXT PRIMARY KEY,
+            configured_path TEXT NOT NULL,
+            write_path TEXT NOT NULL,
+            original BLOB,
+            output BLOB NOT NULL
         );
 
         CREATE INDEX IF NOT EXISTS backups_target_created_idx

@@ -23,6 +23,7 @@ import type {
   ReasoningEffort,
   ReasoningSummary,
   TargetKind,
+  TargetModelState,
   TargetStatus,
 } from "../types";
 import type { createTranslator } from "../lib/i18n";
@@ -37,7 +38,9 @@ import { TargetIcon } from "./TargetIcon";
 interface InspectorPanelProps {
   model: ManagedModel | null;
   selectedCount: number;
+  selectedSourceCount?: number;
   targets: TargetStatus[];
+  targetModelStates: TargetModelState[];
   selectedTargets: TargetKind[];
   busy: boolean;
   t: ReturnType<typeof createTranslator>;
@@ -47,14 +50,20 @@ interface InspectorPanelProps {
   applyingOpenRouter: boolean;
   openRouterAvailable: boolean;
   checkingOpenRouter: boolean;
+  openRouterUnavailable?: boolean;
+  onRetryOpenRouter?: () => void;
+  targetsStale?: boolean;
   onToggleTarget: (target: TargetKind) => void;
+  onRequestCleanup: (target: TargetKind) => void;
   onDirtyChange: (modelKey: string | null, changed: boolean) => void;
 }
 
 export function InspectorPanel({
   model,
   selectedCount,
+  selectedSourceCount = 1,
   targets,
+  targetModelStates,
   selectedTargets,
   busy,
   t,
@@ -64,7 +73,11 @@ export function InspectorPanel({
   applyingOpenRouter,
   openRouterAvailable,
   checkingOpenRouter,
+  openRouterUnavailable,
+  onRetryOpenRouter,
+  targetsStale,
   onToggleTarget,
+  onRequestCleanup,
   onDirtyChange,
 }: InspectorPanelProps) {
   const [capabilities, setCapabilities] = useState<CapabilitySet | null>(
@@ -130,12 +143,22 @@ export function InspectorPanel({
                 variant="secondary"
                 size="sm"
                 type="button"
-                onClick={onApplyOpenRouter}
-                disabled={busy || !openRouterAvailable}
+                onClick={
+                  openRouterUnavailable ? onRetryOpenRouter : onApplyOpenRouter
+                }
+                disabled={
+                  busy ||
+                  checkingOpenRouter ||
+                  (!openRouterAvailable && !openRouterUnavailable)
+                }
                 title={
-                  openRouterAvailable
-                    ? t("openRouterApplyHint")
-                    : t("openRouterUnavailable")
+                  openRouterUnavailable
+                    ? t("openRouterLookupFailed")
+                    : checkingOpenRouter
+                      ? t("openRouterChecking")
+                      : openRouterAvailable
+                        ? t("openRouterApplyHint")
+                        : t("openRouterUnavailable")
                 }
               >
                 {applyingOpenRouter || checkingOpenRouter ? (
@@ -143,7 +166,9 @@ export function InspectorPanel({
                 ) : (
                   <CloudDownload aria-hidden="true" size={16} />
                 )}
-                {t("applyOpenRouter")}
+                {t(
+                  openRouterUnavailable ? "retryOpenRouter" : "applyOpenRouter",
+                )}
               </Button>
               <Button
                 variant="secondary"
@@ -161,6 +186,9 @@ export function InspectorPanel({
                 {t("probe")}
               </Button>
             </div>
+            {openRouterUnavailable ? (
+              <p role="status">{t("openRouterLookupFailed")}</p>
+            ) : null}
             <div className="capability-list">
               <CapabilityToggle
                 icon={<Wrench />}
@@ -331,68 +359,18 @@ export function InspectorPanel({
             ) : null}
           </section>
 
-          <section className="inspector-section publish-section">
-            <h3>{t("targets")}</h3>
-            <div className="target-list">
-              {targets.map((target) => {
-                const invalid =
-                  !target.installed ||
-                  target.schema === "invalid" ||
-                  !target.writable;
-                return (
-                  <label
-                    className={`target-option${selectedTargets.includes(target.kind) ? " is-selected" : ""}${invalid ? " is-disabled" : ""}`}
-                    key={target.kind}
-                  >
-                    <input
-                      className="target-option__native-checkbox"
-                      type="checkbox"
-                      checked={selectedTargets.includes(target.kind)}
-                      onChange={() => onToggleTarget(target.kind)}
-                      disabled={busy || invalid}
-                      aria-label={target.displayName}
-                    />
-                    <span
-                      className="target-option__checkbox"
-                      aria-hidden="true"
-                    >
-                      <Check size={13} />
-                    </span>
-                    <TargetIcon target={target.kind} />
-                    <span className="target-option__copy">
-                      <strong>{target.displayName}</strong>
-                      <small
-                        className={
-                          target.drifted || invalid
-                            ? "status-warning"
-                            : undefined
-                        }
-                      >
-                        {targetStatusLabel(target, t)}
-                      </small>
-                      <code title={target.path}>{target.path}</code>
-                    </span>
-                    <TargetStatusIcon target={target} />
-                  </label>
-                );
-              })}
-            </div>
-
-            <div
-              className={`publish-readiness${selectedCount > 0 && selectedTargets.length > 0 ? " is-ready" : ""}`}
-            >
-              <GitCompareArrows aria-hidden="true" size={18} />
-              <div>
-                <strong>
-                  {t("publishScope", {
-                    models: selectedCount,
-                    targets: selectedTargets.length,
-                  })}
-                </strong>
-                <small>{t("publishHint")}</small>
-              </div>
-            </div>
-          </section>
+          <TargetSection
+            targets={targets}
+            targetModelStates={targetModelStates}
+            selectedTargets={selectedTargets}
+            selectedCount={selectedCount}
+            selectedSourceCount={selectedSourceCount}
+            busy={busy}
+            t={t}
+            targetsStale={targetsStale}
+            onToggleTarget={onToggleTarget}
+            onRequestCleanup={onRequestCleanup}
+          />
         </div>
       ) : (
         <div className="empty-state inspector-empty">
@@ -403,7 +381,140 @@ export function InspectorPanel({
           <p>{t("selectModelBody")}</p>
         </div>
       )}
+      {!model ? (
+        <TargetSection
+          targets={targets}
+          targetModelStates={targetModelStates}
+          selectedTargets={selectedTargets}
+          selectedCount={selectedCount}
+          selectedSourceCount={selectedSourceCount}
+          busy={busy}
+          t={t}
+          targetsStale={targetsStale}
+          onToggleTarget={onToggleTarget}
+          onRequestCleanup={onRequestCleanup}
+        />
+      ) : null}
     </aside>
+  );
+}
+
+function TargetSection({
+  targets,
+  targetModelStates,
+  selectedTargets,
+  selectedCount,
+  selectedSourceCount,
+  busy,
+  t,
+  targetsStale,
+  onToggleTarget,
+  onRequestCleanup,
+}: {
+  targets: TargetStatus[];
+  targetModelStates: TargetModelState[];
+  selectedTargets: TargetKind[];
+  selectedCount: number;
+  selectedSourceCount: number;
+  busy: boolean;
+  t: ReturnType<typeof createTranslator>;
+  targetsStale?: boolean;
+  onToggleTarget: (target: TargetKind) => void;
+  onRequestCleanup: (target: TargetKind) => void;
+}) {
+  return (
+    <section className="inspector-section publish-section">
+      <h3>{t("targets")}</h3>
+      <div className="target-list">
+        {targets.map((target) => {
+          const invalid =
+            !target.installed ||
+            target.schema === "invalid" ||
+            !target.writable;
+          return (
+            <label
+              className={`target-option${selectedTargets.includes(target.kind) ? " is-selected" : ""}${invalid ? " is-disabled" : ""}`}
+              key={target.kind}
+            >
+              <input
+                className="target-option__native-checkbox"
+                type="checkbox"
+                checked={selectedTargets.includes(target.kind)}
+                onChange={() => onToggleTarget(target.kind)}
+                disabled={busy || invalid}
+                aria-label={target.displayName}
+              />
+              <span className="target-option__checkbox" aria-hidden="true">
+                <Check size={13} />
+              </span>
+              <TargetIcon target={target.kind} />
+              <span className="target-option__copy">
+                <strong>{target.displayName}</strong>
+                <small
+                  className={
+                    target.drifted || invalid ? "status-warning" : undefined
+                  }
+                >
+                  {targetsStale
+                    ? t("targetStateUnknown")
+                    : targetStatusLabel(target, t)}
+                </small>
+                <code title={target.path}>{target.path}</code>
+              </span>
+              <TargetStatusIcon target={target} />
+            </label>
+          );
+        })}
+      </div>
+      {!targetsStale ? (
+        <div className="target-cleanup-actions">
+          {targets.map((target) => {
+            const unmatchedCount =
+              targetModelStates.find((state) => state.target === target.kind)
+                ?.unmatchedCount ?? 0;
+            const invalid =
+              !target.installed ||
+              target.schema === "invalid" ||
+              !target.writable;
+            return unmatchedCount > 0 && !invalid ? (
+              <Button
+                key={target.kind}
+                variant="secondary"
+                size="sm"
+                type="button"
+                onClick={() => onRequestCleanup(target.kind)}
+                disabled={busy}
+              >
+                {t("cleanupTargetModels", {
+                  target: target.displayName,
+                  count: unmatchedCount,
+                })}
+              </Button>
+            ) : null;
+          })}
+        </div>
+      ) : null}
+
+      <div
+        className={`publish-readiness${selectedSourceCount > 0 && selectedTargets.length > 0 ? " is-ready" : ""}`}
+      >
+        <GitCompareArrows aria-hidden="true" size={18} />
+        <div>
+          <strong>
+            {t("publishScope", {
+              models: selectedCount,
+              targets: selectedTargets.length,
+            })}
+          </strong>
+          <small>
+            {t("globalPublishSelection", {
+              sources: selectedSourceCount,
+              models: selectedCount,
+            })}
+          </small>
+        </div>
+      </div>
+    </section>
   );
 }
 

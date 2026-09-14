@@ -15,14 +15,21 @@ export function ImportNotice({
   t,
   onToggle,
   onClose,
+  onRecover,
+  recovering = false,
 }: {
   report: TargetImportReport;
   expanded: boolean;
   t: ReturnType<typeof createTranslator>;
   onToggle: () => void;
   onClose: () => void;
+  onRecover?: () => void;
+  recovering?: boolean;
 }) {
   const hasIssues = report.issues.length > 0;
+  const canRecover = report.issues.some(
+    (item) => item.code === "interruptedWriteFailed",
+  );
   return (
     <aside
       className={`import-notice${hasIssues ? "" : " is-success"}`}
@@ -83,15 +90,28 @@ export function ImportNotice({
           {expanded ? t("hideImportDetails") : t("viewImportDetails")}
         </Button>
       ) : null}
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        type="button"
-        onClick={onClose}
-        aria-label={t("dismissImportNotice")}
-      >
-        <X aria-hidden="true" size={15} />
-      </Button>
+      {canRecover ? (
+        <Button
+          variant="secondary"
+          size="sm"
+          type="button"
+          onClick={onRecover}
+          disabled={recovering}
+        >
+          {recovering ? t("recoveringWrites") : t("retryRecovery")}
+        </Button>
+      ) : null}
+      {!canRecover ? (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          type="button"
+          onClick={onClose}
+          aria-label={t("dismissImportNotice")}
+        >
+          <X aria-hidden="true" size={15} />
+        </Button>
+      ) : null}
     </aside>
   );
 }
@@ -102,6 +122,7 @@ function importIssueLabel(
 ) {
   const labels = {
     targetReadFailed: "importIssueTargetReadFailed",
+    invalidTargetPath: "importIssueInvalidTargetPath",
     missingModelId: "importIssueMissingModelId",
     missingUrl: "importIssueMissingUrl",
     invalidUrl: "importIssueInvalidUrl",
@@ -112,6 +133,9 @@ function importIssueLabel(
     ambiguousGateway: "importIssueAmbiguousGateway",
     targetConflict: "importIssueTargetConflict",
     modelConflict: "importIssueModelConflict",
+    interruptedWriteRecovered: "interruptedWriteRecovered",
+    interruptedWriteChanged: "interruptedWriteChanged",
+    interruptedWriteFailed: "interruptedWriteFailed",
   } as const;
   return t(labels[code as keyof typeof labels] ?? "importIssueUnknown");
 }

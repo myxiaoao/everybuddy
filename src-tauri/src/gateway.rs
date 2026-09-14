@@ -198,6 +198,20 @@ impl GatewayClient {
             .cloned()
     }
 
+    pub async fn market_match(
+        &self,
+        model_id: &str,
+        vendor: &str,
+        retry: bool,
+    ) -> CoreResult<Option<String>> {
+        Ok(self
+            .market_catalog
+            .snapshot_result(retry)
+            .await?
+            .find(model_id, vendor)
+            .map(|model| model.id.clone()))
+    }
+
     pub async fn market_model_detail(
         &self,
         model_id: &str,
@@ -508,6 +522,7 @@ fn parse_http_url(input: &str) -> CoreResult<Url> {
 }
 
 pub fn normalize_request_url(input: &str) -> CoreResult<String> {
+    crate::input_limits::text(input, crate::input_limits::URL_BYTES, "Request URL")?;
     let mut url = parse_http_url(input)?;
     let path = url.path().trim_end_matches('/').to_string();
     url.set_path(if path.is_empty() { "/" } else { &path });
@@ -515,6 +530,7 @@ pub fn normalize_request_url(input: &str) -> CoreResult<String> {
 }
 
 pub fn normalize_api_root(input: &str) -> CoreResult<String> {
+    crate::input_limits::text(input, crate::input_limits::URL_BYTES, "API URL")?;
     let mut url = parse_http_url(input)?;
 
     let path = url.path().trim_end_matches('/');

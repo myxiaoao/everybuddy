@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{CoreError, CoreResult},
-    target::{atomic_write, fingerprint, read_target_file},
+    target::{atomic_write_resolved, fingerprint, read_target_file},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,7 +18,7 @@ pub fn replace_exact(
     output: &[u8],
     subject: &str,
 ) -> CoreResult<VerifiedWrite> {
-    replace_exact_with(path, expected, output, subject, atomic_write)
+    replace_exact_with(path, expected, output, subject, atomic_write_resolved)
 }
 
 pub fn rollback_exact(
@@ -143,8 +143,15 @@ where
     })
 }
 
-fn current_bytes(path: &Path) -> CoreResult<Option<Vec<u8>>> {
-    path.exists().then(|| read_target_file(path)).transpose()
+pub(crate) fn current_bytes(path: &Path) -> CoreResult<Option<Vec<u8>>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => Err(
+            CoreError::Drift("Target path changed type; external changes were preserved".into()),
+        ),
+        Ok(_) => read_target_file(path).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(CoreError::from(error)),
+    }
 }
 
 #[cfg(test)]
@@ -153,6 +160,7 @@ mod tests {
 
     use super::*;
     use crate::error::CoreError;
+    use crate::target::atomic_write;
 
     #[test]
     fn stale_input_is_preserved() {
@@ -166,6 +174,37 @@ mod tests {
 
         assert!(matches!(error, CoreError::Drift(_)));
         assert_eq!(fs::read(path).unwrap(), external);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_retargeted_links_without_writing_their_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("models.json");
+        let destination = directory.path().join("other.json");
+        fs::write(&destination, b"[]").unwrap();
+        std::os::unix::fs::symlink(&destination, &path).unwrap();
+        assert!(replace_exact(&path, Some(b"[]"), b"[1]", "Target").is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"[]");
+        assert!(path.is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn commit_does_not_follow_a_link_inserted_after_the_compare() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("models.json");
+        let other = directory.path().join("other.json");
+        fs::write(&path, b"[]").unwrap();
+        fs::write(&other, b"[2]").unwrap();
+        replace_exact_with(&path, Some(b"[]"), b"[1]", "Target", |path, output| {
+            fs::remove_file(path).unwrap();
+            std::os::unix::fs::symlink(&other, path).unwrap();
+            atomic_write_resolved(path, output)
+        })
+        .unwrap();
+        assert_eq!(fs::read(other).unwrap(), b"[2]");
+        assert_eq!(fs::read(path).unwrap(), b"[1]");
     }
 
     #[test]

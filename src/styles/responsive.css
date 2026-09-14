@@ -190,7 +190,7 @@
 
   .model-table__header,
   .model-row {
-    grid-template-columns: 34px minmax(0, 1fr) 92px;
+    grid-template-columns: 40px minmax(0, 1fr) 92px;
     padding-inline: var(--space-3);
   }
 

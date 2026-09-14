@@ -43,6 +43,30 @@ describe("ManualModelDialog", () => {
 });
 
 describe("PublishDialog", () => {
+  it("cannot dismiss an executing publish with Cancel, Escape, or the close button", () => {
+    const onClose = vi.fn();
+    render(
+      <PublishDialog
+        open
+        busy
+        publishing
+        preview={null}
+        result={null}
+        t={createTranslator("en")}
+        onClose={onClose}
+        onConfirm={() => undefined}
+      />,
+    );
+    const dialog = screen.getByRole("dialog");
+    const cancel = within(dialog).getByRole("button", { name: "Cancel" });
+    expect(cancel).toBeDisabled();
+    fireEvent.click(cancel);
+    fireEvent.keyDown(dialog, { key: "Escape", code: "Escape" });
+    expect(
+      within(dialog).queryByRole("button", { name: "Close" }),
+    ).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
   it("does not imply that the target runtime has already reloaded", () => {
     render(
       <PublishDialog

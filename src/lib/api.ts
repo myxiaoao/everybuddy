@@ -18,6 +18,8 @@ import type {
   SaveGatewayResult,
   TargetKind,
   TargetImportReport,
+  TargetCleanupResult,
+  TargetImportIssue,
   TargetModelState,
   TargetSnapshot,
   TargetStatus,
@@ -40,8 +42,8 @@ export const api = {
     call<ManagedModel>("add_manual_model", { input }),
   probeModel: (modelKey: string) =>
     call<ProbeSummary>("probe_model", { modelKey }),
-  getOpenRouterModelMatch: (modelKey: string) =>
-    call<string | null>("get_openrouter_model_match", { modelKey }),
+  getOpenRouterModelMatch: (modelKey: string, retry = false) =>
+    call<string | null>("get_openrouter_model_match", { modelKey, retry }),
   applyOpenRouterModel: (modelKey: string) =>
     call<ManagedModel>("apply_openrouter_model", { modelKey }),
   updateModel: (input: ModelUpdateInput) => {
@@ -70,8 +72,7 @@ export const api = {
           writePath: target.writePath,
           fingerprint: target.fingerprint,
         })),
-        gatewayRevision: preview.gatewayRevision,
-        credentialRevision: preview.credentialRevision,
+        sourceRevisions: preview.sourceRevisions,
         modelRevisions: preview.modelRevisions,
         acceptConflicts,
       },
@@ -79,6 +80,10 @@ export const api = {
   listBackups: (target?: TargetKind) =>
     call<BackupRecord[]>("list_backups", { target: target ?? null }),
   restoreBackup: (id: string) => call<void>("restore_backup", { id }),
+  cleanupUnmatchedModels: (target: TargetKind) =>
+    call<TargetCleanupResult>("cleanup_unmatched_models", { target }),
+  recoverPendingWrites: () =>
+    call<TargetImportIssue[]>("recover_pending_writes"),
   saveSettings: (settings: AppSettings) =>
     call<AppSettings>("save_settings", { input: settings }),
 };
@@ -345,6 +350,19 @@ async function demoCall(
     }
     case "restore_backup":
       return undefined;
+    case "cleanup_unmatched_models": {
+      const target = (args as { target: TargetKind }).target;
+      const state = demoTargetModelStates.find(
+        (item) => item.target === target,
+      );
+      const removedCount = state?.unmatchedCount ?? 0;
+      demoTargetModelStates = demoTargetModelStates.map((item) =>
+        item.target === target ? { ...item, unmatchedCount: 0 } : item,
+      );
+      return { target, removedCount } satisfies TargetCleanupResult;
+    }
+    case "recover_pending_writes":
+      return [] satisfies TargetImportIssue[];
     case "discover_models": {
       const gatewayId = String((args as { gatewayId: string }).gatewayId);
       return demoModels.filter((model) => model.gatewayId === gatewayId);
@@ -407,46 +425,96 @@ async function demoCall(
       } satisfies TargetSnapshot;
     case "prepare_publish": {
       const request = (args as { request: PreparePublishRequest }).request;
+      const ids = request.sources.flatMap((source) => source.modelIds);
+      if (new Set(ids).size !== ids.length)
+        throw new Error("Choose one API source per Model ID");
+      const sourceIds = new Set(
+        request.sources.map((source) => source.gatewayId),
+      );
+      const conflicts = request.targets.flatMap((target) => {
+        const state = demoTargetModelStates.find(
+          (state) => state.target === target,
+        );
+        return demoModels
+          .filter(
+            (model) =>
+              state?.matchedModelKeys.includes(model.key) &&
+              ids.includes(model.id),
+          )
+          .map((model) => ({
+            target,
+            modelId: model.id,
+            existingName: model.name,
+          }));
+      });
       return {
         targets: request.targets.map((target) => ({
           target,
           path: demoSettings.targetPaths[target],
           writePath: demoSettings.targetPaths[target],
           fingerprint: `demo-${target}`,
-          addCount: request.modelIds.length - 1,
-          updateCount: 1,
+          addCount:
+            ids.length -
+            conflicts.filter((conflict) => conflict.target === target).length,
+          updateCount: conflicts.filter(
+            (conflict) => conflict.target === target,
+          ).length,
           unchangedCount: 0,
-        })),
-        conflicts: request.targets.map((target) => ({
-          target,
-          modelId: request.modelIds[0],
-          existingName: request.modelIds[0],
-        })),
-        warnings: ["Target configuration files contain the API token."],
-        gatewayRevision:
-          demoGateways.find((gateway) => gateway.id === request.gatewayId)
-            ?.updatedAt ?? now,
-        credentialRevision: `demo-credential-${request.gatewayId}`,
-        modelRevisions: demoModels
-          .filter(
+          removeCount: demoModels.filter(
             (model) =>
-              model.gatewayId === request.gatewayId &&
-              request.modelIds.includes(model.id),
-          )
+              sourceIds.has(model.gatewayId) &&
+              !ids.includes(model.id) &&
+              demoTargetModelStates
+                .find((state) => state.target === target)
+                ?.matchedModelKeys.includes(model.key),
+          ).length,
+        })),
+        conflicts,
+        warnings: ["Target configuration files contain the API token."],
+        sourceRevisions: request.sources.map((source) => ({
+          gatewayId: source.gatewayId,
+          modelIds: [...source.modelIds].sort(),
+          gatewayRevision:
+            demoGateways.find((gateway) => gateway.id === source.gatewayId)
+              ?.updatedAt ?? now,
+          credentialRevision: `demo-credential-${source.gatewayId}`,
+        })),
+        sources: request.sources.map((source) => ({
+          ...source,
+          gatewayName:
+            demoGateways.find((gateway) => gateway.id === source.gatewayId)
+              ?.name ?? source.gatewayId,
+        })),
+        modelRevisions: demoModels
+          .filter((model) => sourceIds.has(model.gatewayId))
           .map((model) => ({ key: model.key, updatedAt: model.updatedAt })),
       } satisfies PublishPreview;
     }
     case "execute_publish": {
       const request = (args as { request: PreparePublishRequest }).request;
-      const publishedKeys = request.modelIds.map(
-        (id) => `${request.gatewayId}::${id}`,
+      const publishedKeys = request.sources.flatMap((source) =>
+        source.modelIds.map((id) => `${source.gatewayId}::${id}`),
+      );
+      const publishedIds = new Set(
+        request.sources.flatMap((source) => source.modelIds),
+      );
+      const sourceIds = new Set(
+        request.sources.map((source) => source.gatewayId),
       );
       demoTargetModelStates = demoTargetModelStates.map((state) =>
         request.targets.includes(state.target)
           ? {
               ...state,
               matchedModelKeys: [
-                ...new Set([...state.matchedModelKeys, ...publishedKeys]),
+                ...state.matchedModelKeys.filter((key) => {
+                  const model = demoModels.find((model) => model.key === key);
+                  return (
+                    model &&
+                    !sourceIds.has(model.gatewayId) &&
+                    !publishedIds.has(model.id)
+                  );
+                }),
+                ...publishedKeys,
               ],
             }
           : state,

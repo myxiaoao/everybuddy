@@ -23,6 +23,8 @@ interface CommandBarProps {
   gateway: GatewayProfile | null;
   modelCount: number;
   selectedModelCount: number;
+  selectedSourceCount?: number;
+  hasPublishSelection?: boolean;
   selectedTargetCount: number;
   view: WorkspaceView;
   refreshing: boolean;
@@ -38,6 +40,8 @@ export function CommandBar({
   gateway,
   modelCount,
   selectedModelCount,
+  selectedSourceCount = 1,
+  hasPublishSelection = selectedModelCount > 0,
   selectedTargetCount,
   view,
   refreshing,
@@ -48,7 +52,7 @@ export function CommandBar({
   onRefresh,
   onPublish,
 }: CommandBarProps) {
-  const canPublish = selectedModelCount > 0 && selectedTargetCount > 0;
+  const canPublish = hasPublishSelection && selectedTargetCount > 0;
   const currentStage = {
     gateways: {
       label: t("apiStage"),
@@ -154,10 +158,17 @@ export function CommandBar({
               className="command-primary"
               type="button"
               onClick={onPublish}
+              title={t("globalPublishSelection", {
+                sources: selectedSourceCount,
+                models: selectedModelCount,
+              })}
               disabled={busy || refreshing || !canPublish}
             >
               <Upload aria-hidden="true" size={16} />
               <span className="command-primary__label">{t("publish")}</span>
+              <span className="command-primary__sources">
+                {t("publishSourceCount", { count: selectedSourceCount })}
+              </span>
               <span className="command-primary__label--compact">
                 {t("publishShort")}
               </span>

@@ -25,7 +25,7 @@ describe("EveryBuddy workspace", () => {
       expect(screen.getAllByText("GPT-5.6").length).toBeGreaterThan(0),
     );
     expect(screen.getAllByText("Sub2API").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText("v0.1.2")).toBeInTheDocument();
+    expect(screen.getByText("v0.1.3")).toBeInTheDocument();
     expect(screen.getByText("Local Relay")).toBeInTheDocument();
     expect(screen.getAllByText("WorkBuddy").length).toBeGreaterThan(0);
     expect(screen.getAllByText("CodeBuddy").length).toBeGreaterThan(0);
@@ -155,9 +155,11 @@ describe("EveryBuddy workspace", () => {
       name: "从 OpenRouter 设置",
     });
     await waitFor(() => expect(unavailableButton).toBeDisabled());
-    expect(unavailableButton).toHaveAttribute(
-      "title",
-      "未在 OpenRouter 模型目录中匹配到此模型",
+    await waitFor(() =>
+      expect(unavailableButton).toHaveAttribute(
+        "title",
+        "未在 OpenRouter 模型目录中匹配到此模型",
+      ),
     );
   });
 
@@ -379,7 +381,9 @@ describe("EveryBuddy workspace", () => {
 
     await waitFor(() => expect(preparePublish).toHaveBeenCalled());
     expect(preparePublish).toHaveBeenCalledWith(
-      expect.objectContaining({ modelIds: ["gpt-5.6"] }),
+      expect.objectContaining({
+        sources: [{ gatewayId: "demo-gateway", modelIds: ["gpt-5.6"] }],
+      }),
     );
   });
 
@@ -832,6 +836,27 @@ describe("EveryBuddy workspace", () => {
     expect(within(gatewayDialog).getByLabelText("Token Key")).toHaveAttribute(
       "type",
       "password",
+    );
+  });
+
+  it("preserves the active model when refreshing the selected gateway", async () => {
+    const data = await api.bootstrap();
+    vi.spyOn(api, "discoverModels").mockResolvedValue(
+      data.models.filter((model) => model.gatewayId === "demo-gateway"),
+    );
+    render(<App />);
+    await screen.findAllByText("GPT-5.6");
+
+    fireEvent.click(screen.getByRole("button", { name: /Claude Sonnet 4\.5/ }));
+    expect(
+      screen.getByRole("heading", { name: "Claude Sonnet 4.5" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "刷新模型" })[0]);
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { name: "Claude Sonnet 4.5" }),
+      ).toBeInTheDocument(),
     );
   });
 });

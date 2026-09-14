@@ -44,6 +44,11 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ImportNotice } from "./components/ImportNotice";
 import { ErrorNotice } from "./components/ErrorNotice";
 import { useAppUpdater } from "./hooks/use-app-updater";
+import { PublishSourcesDialog } from "./components/PublishSourcesDialog";
+import {
+  findPublishSourceConflicts,
+  resolvePublishSources,
+} from "./lib/publish-selection";
 import {
   reportFrontendError,
   reportFrontendWarning,
@@ -74,6 +79,7 @@ type DialogKind =
   | "backups"
   | "removeGateway"
   | "restoreBackup"
+  | "cleanupTarget"
   | "discard";
 
 function App() {
@@ -113,9 +119,15 @@ function App() {
   const [probeDialog, setProbeDialog] = useState(false);
   const [applyingOpenRouter, setApplyingOpenRouter] = useState(false);
   const [openRouterModelMatches, setOpenRouterModelMatches] = useState<
-    Record<string, boolean>
+    Record<string, "checking" | "matched" | "unmatched" | "unavailable">
   >({});
+  const [openRouterRetry, setOpenRouterRetry] = useState(0);
+  const openRouterRetryRef = useRef(false);
+  const [targetsStale, setTargetsStale] = useState(false);
+  const [backupsStale, setBackupsStale] = useState(false);
   const [settingsDialog, setSettingsDialog] = useState(false);
+  const [sourceChoiceRequest, setSourceChoiceRequest] =
+    useState<PreparePublishRequest | null>(null);
   const [backupsDialog, setBackupsDialog] = useState(false);
   const [backups, setBackups] = useState<BackupRecord[]>([]);
   const [gatewayToDelete, setGatewayToDelete] = useState<GatewayProfile | null>(
@@ -124,12 +136,16 @@ function App() {
   const [backupToRestore, setBackupToRestore] = useState<BackupRecord | null>(
     null,
   );
+  const [targetToCleanup, setTargetToCleanup] = useState<TargetKind | null>(
+    null,
+  );
   const [inspectorRevision, setInspectorRevision] = useState(0);
   const [compactView, setCompactView] = useState<WorkspaceView>("gateways");
   const [importReport, setImportReport] = useState<TargetImportReport | null>(
     null,
   );
   const [importDetailsExpanded, setImportDetailsExpanded] = useState(false);
+  const [recoveringPendingWrites, setRecoveringPendingWrites] = useState(false);
   const pendingActionRef = useRef<(() => void | Promise<void>) | null>(null);
   const targetPollErrorLoggedRef = useRef(false);
   const targetRefreshGenerationRef = useRef(0);
@@ -145,6 +161,7 @@ function App() {
     availableUpdate,
     updateCheckStatus,
     installingUpdate,
+    restartRequired,
     checkForUpdates,
     installUpdate,
   } = useAppUpdater();
@@ -157,7 +174,7 @@ function App() {
     },
     [],
   );
-  const busy = isWorkspaceBusy(workflow);
+  const busy = isWorkspaceBusy(workflow) || installingUpdate;
   const {
     dirtyModelKey,
     discardOpen: discardDialog,
@@ -193,26 +210,28 @@ function App() {
     if (!activeModel) return;
     const modelKey = activeModel.key;
     let cancelled = false;
+    const retry = openRouterRetryRef.current;
+    openRouterRetryRef.current = false;
     void api
-      .getOpenRouterModelMatch(modelKey)
+      .getOpenRouterModelMatch(modelKey, retry)
       .then((match) => {
         if (cancelled) return;
         setOpenRouterModelMatches((current) => ({
           ...current,
-          [modelKey]: Boolean(match),
+          [modelKey]: match ? "matched" : "unmatched",
         }));
       })
       .catch(() => {
         if (cancelled) return;
         setOpenRouterModelMatches((current) => ({
           ...current,
-          [modelKey]: false,
+          [modelKey]: "unavailable",
         }));
       });
     return () => {
       cancelled = true;
     };
-  }, [activeModel]);
+  }, [activeModel, openRouterRetry]);
   const publishableTargetKinds = useMemo(
     () => targets.filter(isTargetPublishable).map((target) => target.kind),
     [targets],
@@ -224,6 +243,8 @@ function App() {
     selection: modelSelection,
     selectedKeys,
     selectedModelCount,
+    globalModelCount,
+    publishSources,
     toggleAll,
     clearSelection,
     toggleModel,
@@ -246,11 +267,13 @@ function App() {
         if (targetRefreshGenerationRef.current !== generation) return null;
         setTargets(snapshot.targets);
         setTargetModelStates(snapshot.targetModelStates);
+        setTargetsStale(false);
         targetPollErrorLoggedRef.current = false;
         return snapshot.targetModelStates;
       })
       .catch((caught: unknown) => {
         if (targetRefreshGenerationRef.current !== generation) return null;
+        setTargetsStale(true);
         if (!targetPollErrorLoggedRef.current) {
           reportFrontendWarning("target-state.refresh", caught);
           targetPollErrorLoggedRef.current = true;
@@ -488,7 +511,11 @@ function App() {
         ...discovered,
       ]);
       if (selectedGatewayIdRef.current === gatewayId) {
-        setActiveKey(discovered[0]?.key ?? null);
+        setActiveKey((current) =>
+          discovered.some((model) => model.key === current)
+            ? current
+            : (discovered[0]?.key ?? null),
+        );
       }
       setGatewayConnectionStates((current) => ({
         ...current,
@@ -692,14 +719,20 @@ function App() {
   }
 
   async function previewPublish() {
-    if (!selectedGateway) return;
+    if (busy || refreshingGatewayIds.size > 0) return;
     const request: PreparePublishRequest = {
-      gatewayId: selectedGateway.id,
-      modelIds: gatewayModels
-        .filter((model) => selectedKeys.has(model.key))
-        .map((model) => model.id),
+      sources: publishSources,
       targets: selectedTargets,
     };
+    setError(null);
+    if (findPublishSourceConflicts(request.sources, gateways).length > 0) {
+      setSourceChoiceRequest(request);
+      return;
+    }
+    await preparePublishRequest(request);
+  }
+
+  async function preparePublishRequest(request: PreparePublishRequest) {
     const sessionId = ++publishSessionGenerationRef.current;
     dispatchWorkflow({ type: "publishPreviewRequested", sessionId, request });
     dispatchWorkflow({ type: "operationStarted" });
@@ -737,15 +770,21 @@ function App() {
       setStatusMessage({
         key: result.success ? "published" : "publishFailed",
       });
-      await loadTargets(true);
-      if (result.success) {
+      const refreshedStates = await loadTargets(true);
+      if (result.success && refreshedStates) {
         clearSelectionOverrides(
-          request.modelIds.map((id) => `${request.gatewayId}::${id}`),
+          models
+            .filter((model) =>
+              request.sources.some(
+                (source) => source.gatewayId === model.gatewayId,
+              ),
+            )
+            .map((model) => model.key),
         );
       }
     } catch (caught) {
       dispatchWorkflow({ type: "publishExecutionFailed", sessionId });
-      showError(caught);
+      await showErrorAndOfferRecovery(caught);
     } finally {
       dispatchWorkflow({ type: "operationFinished" });
     }
@@ -770,6 +809,7 @@ function App() {
     dispatchWorkflow({ type: "operationStarted" });
     try {
       setBackups(await api.listBackups());
+      setBackupsStale(false);
     } catch (caught) {
       showError(caught);
     } finally {
@@ -782,7 +822,14 @@ function App() {
     try {
       await api.restoreBackup(backup.id);
       setStatusMessage({ key: "restore" });
-      setBackups(await api.listBackups());
+      setBackupToRestore(null);
+      try {
+        setBackups(await api.listBackups());
+        setBackupsStale(false);
+      } catch (caught) {
+        reportFrontendWarning("backups.refresh", caught);
+        setBackupsStale(true);
+      }
       const previousKeys =
         targetModelStates.find((state) => state.target === backup.target)
           ?.matchedModelKeys ?? [];
@@ -790,21 +837,93 @@ function App() {
       const restoredKeys =
         nextStates?.find((state) => state.target === backup.target)
           ?.matchedModelKeys ?? [];
-      clearSelectionOverrides(new Set([...previousKeys, ...restoredKeys]));
-      setBackupToRestore(null);
+      if (nextStates)
+        clearSelectionOverrides(new Set([...previousKeys, ...restoredKeys]));
     } catch (caught) {
-      showError(caught);
+      await showErrorAndOfferRecovery(caught);
     } finally {
       dispatchWorkflow({ type: "operationFinished" });
     }
   }
 
-  async function requestInstallUpdate() {
+  async function cleanupTarget(target: TargetKind) {
+    dispatchWorkflow({ type: "operationStarted" });
+    setError(null);
     try {
-      await installUpdate();
+      const result = await api.cleanupUnmatchedModels(target);
+      setTargetToCleanup(null);
+      setStatusMessage({
+        key: "targetModelsCleaned",
+        values: {
+          target: displayTarget(result.target),
+          count: result.removedCount,
+        },
+      });
+      await loadTargets(true);
+    } catch (caught) {
+      await showErrorAndOfferRecovery(caught);
+    } finally {
+      dispatchWorkflow({ type: "operationFinished" });
+    }
+  }
+
+  async function recoverPendingWrites() {
+    setRecoveringPendingWrites(true);
+    dispatchWorkflow({ type: "operationStarted" });
+    setError(null);
+    try {
+      const issues = await api.recoverPendingWrites();
+      setImportReport((current) => {
+        if (!current) return null;
+        const otherIssues = current.issues.filter(
+          (issue) => !issue.code.startsWith("interruptedWrite"),
+        );
+        const nextIssues = [...otherIssues, ...issues];
+        return nextIssues.length ||
+          current.importedGatewayCount ||
+          current.importedModelCount
+          ? { ...current, issues: nextIssues }
+          : null;
+      });
+      await loadTargets(true);
     } catch (caught) {
       showError(caught);
+    } finally {
+      setRecoveringPendingWrites(false);
+      dispatchWorkflow({ type: "operationFinished" });
     }
+  }
+
+  async function showErrorAndOfferRecovery(caught: unknown) {
+    showError(caught);
+    try {
+      const issues = await api.recoverPendingWrites();
+      if (!issues.length) return;
+      setImportReport((current) => ({
+        importedGatewayCount: current?.importedGatewayCount ?? 0,
+        importedModelCount: current?.importedModelCount ?? 0,
+        issues: [
+          ...(current?.issues.filter(
+            (issue) => !issue.code.startsWith("interruptedWrite"),
+          ) ?? []),
+          ...issues,
+        ],
+      }));
+    } catch (recoveryError) {
+      reportFrontendWarning("publish.recovery", recoveryError);
+    }
+  }
+
+  async function requestInstallUpdate() {
+    if (busy || refreshingGatewayIds.size > 0) return;
+    runAfterDiscard(async () => {
+      setSettingsDialog(false);
+      try {
+        await installUpdate();
+      } catch (caught) {
+        showError(caught);
+      }
+    });
   }
 
   if (loading) {
@@ -840,6 +959,7 @@ function App() {
   const dialogStates: Array<{ kind: DialogKind; open: boolean }> = [
     { kind: "discard", open: discardDialog },
     { kind: "restoreBackup", open: Boolean(backupToRestore) },
+    { kind: "cleanupTarget", open: Boolean(targetToCleanup) },
     { kind: "removeGateway", open: Boolean(gatewayToDelete) },
     { kind: "backups", open: backupsDialog },
     { kind: "settings", open: settingsDialog },
@@ -862,7 +982,7 @@ function App() {
   return (
     <TooltipProvider delayDuration={350}>
       <div
-        className={`app-shell compact-view-${compactView}${importReport ? " has-import-notice" : ""}`}
+        className={`app-shell compact-view-${compactView}${importReport || targetsStale ? " has-import-notice" : ""}`}
       >
         <a
           className="skip-link"
@@ -877,11 +997,13 @@ function App() {
         <CommandBar
           gateway={selectedGateway}
           modelCount={gatewayModels.length}
-          selectedModelCount={selectedModelCount}
+          selectedModelCount={globalModelCount}
+          selectedSourceCount={publishSources.length}
+          hasPublishSelection={publishSources.length > 0}
           selectedTargetCount={selectedTargets.length}
           view={compactView}
           refreshing={selectedGatewayRefreshing}
-          busy={busy}
+          busy={busy || refreshingGatewayIds.size > 0}
           t={t}
           onNavigate={setCompactView}
           onBack={() =>
@@ -893,18 +1015,43 @@ function App() {
           onPublish={() => runAfterDiscard(previewPublish)}
         />
 
-        {importReport ? (
+        {targetsStale ? (
+          <div className="import-notice" role="status">
+            <span aria-hidden="true">!</span>
+            <span>{t("targetsStale")}</span>
+            <Button
+              variant="secondary"
+              disabled={busy}
+              onClick={() => void loadTargets(true)}
+            >
+              {t("retry")}
+            </Button>
+          </div>
+        ) : importReport ? (
           <ImportNotice
             report={importReport}
             expanded={importDetailsExpanded}
             t={t}
             onToggle={() => setImportDetailsExpanded((current) => !current)}
             onClose={() => setImportReport(null)}
+            onRecover={() => void recoverPendingWrites()}
+            recovering={recoveringPendingWrites}
           />
         ) : null}
 
-        <main id="workspace" className="workspace" tabIndex={-1}>
+        <main
+          id="workspace"
+          className="workspace"
+          tabIndex={-1}
+          inert={installingUpdate}
+        >
           <GatewaySidebar
+            selectedCounts={Object.fromEntries(
+              publishSources.map((source) => [
+                source.gatewayId,
+                source.modelIds.length,
+              ]),
+            )}
             currentVersion={currentVersion}
             gateways={gateways}
             selectedId={selectedGatewayId}
@@ -963,8 +1110,10 @@ function App() {
           <InspectorPanel
             key={`${activeModel?.key ?? "none"}-${activeModel?.updatedAt ?? "none"}-${inspectorRevision}`}
             model={activeModel}
-            selectedCount={selectedModelCount}
+            selectedCount={globalModelCount}
+            selectedSourceCount={publishSources.length}
             targets={targets}
+            targetModelStates={targetModelStates}
             selectedTargets={selectedTargets}
             busy={busy || selectedGatewayRefreshing}
             t={t}
@@ -973,12 +1122,30 @@ function App() {
             onApplyOpenRouter={requestApplyOpenRouter}
             applyingOpenRouter={applyingOpenRouter}
             openRouterAvailable={Boolean(
-              activeModel && openRouterModelMatches[activeModel.key],
+              activeModel &&
+              openRouterModelMatches[activeModel.key] === "matched",
             )}
             checkingOpenRouter={Boolean(
-              activeModel && !(activeModel.key in openRouterModelMatches),
+              activeModel &&
+              (!openRouterModelMatches[activeModel.key] ||
+                openRouterModelMatches[activeModel.key] === "checking"),
             )}
+            openRouterUnavailable={Boolean(
+              activeModel &&
+              openRouterModelMatches[activeModel.key] === "unavailable",
+            )}
+            onRetryOpenRouter={() => {
+              if (!activeModel) return;
+              setOpenRouterModelMatches((current) => ({
+                ...current,
+                [activeModel.key]: "checking",
+              }));
+              openRouterRetryRef.current = true;
+              setOpenRouterRetry((current) => current + 1);
+            }}
+            targetsStale={targetsStale}
             onToggleTarget={(target) => void toggleTarget(target)}
+            onRequestCleanup={(target) => setTargetToCleanup(target)}
             onDirtyChange={handleDirtyChange}
           />
         </main>
@@ -990,18 +1157,20 @@ function App() {
         {availableUpdate ? (
           <div className="update-banner" role="status">
             <span>
-              {t("updateAvailable", { version: availableUpdate.version })}
+              {restartRequired
+                ? t("updateRestartRequired")
+                : t("updateAvailable", { version: availableUpdate.version })}
             </span>
             <Button
               size="sm"
               type="button"
               onClick={() => void requestInstallUpdate()}
-              disabled={installingUpdate}
+              disabled={busy || refreshingGatewayIds.size > 0}
             >
               {installingUpdate ? (
                 <LoaderCircle className="spin" aria-hidden="true" size={16} />
               ) : null}
-              {t("updateAndRestart")}
+              {t(restartRequired ? "restartApp" : "updateAndRestart")}
             </Button>
           </div>
         ) : null}
@@ -1038,9 +1207,31 @@ function App() {
             onConfirm={() => void runProbe()}
           />
         ) : null}
+        {sourceChoiceRequest ? (
+          <PublishSourcesDialog
+            conflicts={findPublishSourceConflicts(
+              sourceChoiceRequest.sources,
+              gateways,
+            )}
+            t={t}
+            onClose={() => setSourceChoiceRequest(null)}
+            onConfirm={(choices) => {
+              const request = {
+                ...sourceChoiceRequest,
+                sources: resolvePublishSources(
+                  sourceChoiceRequest.sources,
+                  choices,
+                ),
+              };
+              setSourceChoiceRequest(null);
+              void preparePublishRequest(request);
+            }}
+          />
+        ) : null}
         {publishDialog ? (
           <PublishDialog
             open
+            publishing={publishPhase === "publishing"}
             busy={busy}
             preview={publishPreview}
             result={publishResult}
@@ -1059,6 +1250,8 @@ function App() {
             availableVersion={availableUpdate?.version ?? null}
             updateCheckStatus={updateCheckStatus}
             installingUpdate={installingUpdate}
+            restartRequired={restartRequired}
+            updateBlocked={refreshingGatewayIds.size > 0}
             t={t}
             errorNotice={dialogErrorNotice("settings")}
             onClose={() => setSettingsDialog(false)}
@@ -1069,6 +1262,8 @@ function App() {
         ) : null}
         {backupsDialog ? (
           <BackupsDialog
+            stale={backupsStale}
+            onRefresh={() => void openBackups()}
             open
             busy={busy}
             backups={backups}
@@ -1109,6 +1304,26 @@ function App() {
             errorNotice={dialogErrorNotice("restoreBackup")}
             onClose={() => setBackupToRestore(null)}
             onConfirm={() => void restoreBackup(backupToRestore)}
+          />
+        ) : null}
+        {targetToCleanup ? (
+          <ConfirmationDialog
+            open
+            busy={busy}
+            destructive
+            title={t("cleanupTargetModelsTitle")}
+            description={t("cleanupTargetModelsConfirm", {
+              target: displayTarget(targetToCleanup),
+              count:
+                targetModelStates.find(
+                  (state) => state.target === targetToCleanup,
+                )?.unmatchedCount ?? 0,
+            })}
+            confirmLabel={t("cleanupTargetModelsAction")}
+            t={t}
+            errorNotice={dialogErrorNotice("cleanupTarget")}
+            onClose={() => setTargetToCleanup(null)}
+            onConfirm={() => void cleanupTarget(targetToCleanup)}
           />
         ) : null}
         {discardDialog ? (

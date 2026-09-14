@@ -3,6 +3,17 @@ import type { Language } from "../types";
 const messages = {
   "zh-CN": {
     appName: "EveryBuddy",
+    currentSourceSelection: "当前来源已选 {count} 个",
+    choosePublishSources: "选择同名模型的发布来源",
+    publishSourceConflictHint:
+      "{count} 个 Model ID 同时选中了多个 API 来源。每个 Model ID 只能发布一个来源，请逐项选择；其他同名项本次不发布。",
+    continuePublishPreview: "继续预览",
+    globalPublishSelection:
+      "全局发布：{sources} 个来源、{models} 个 Model ID；每个 ID 只使用一个来源。",
+    publishSourceCount: "{count} 个来源",
+    publishSourcesSummary: "本次发布来源与模型",
+    publishSourceEmpty: "该来源本次不发布模型；已管理配置将按预览移除或替换。",
+    publishReplacementSource: "现有配置：{existing}；本次使用来源：{source}",
     appTagline: "第三方模型配置",
     gateways: "API 来源",
     addGateway: "添加 API",
@@ -141,6 +152,14 @@ const messages = {
       "将向 /v1/chat/completions 发送 3 个最小请求，分别检查工具调用、图片输入和推理模式。请求可能产生少量 Token 费用。",
     runProbe: "执行 3 个请求",
     targets: "发布目标",
+    cleanupTargetModels: "清理 {target} 中 {count} 个未匹配模型",
+    cleanupTargetModelsTitle: "清理未匹配模型",
+    cleanupTargetModelsConfirm:
+      "将从 {target} 配置中移除 {count} 个当前未匹配 EveryBuddy 的模型，并先创建备份。是否继续？",
+    cleanupTargetModelsAction: "清理并备份",
+    targetModelsCleaned: "已从 {target} 清理 {count} 个未匹配模型",
+    retryRecovery: "重试恢复写入",
+    recoveringWrites: "正在恢复写入",
     targetReady: "可发布",
     targetMissing: "未检测到",
     targetDrifted: "配置已变化",
@@ -156,7 +175,7 @@ const messages = {
     updates: "更新 {count}",
     unchanged: "不变 {count}",
     conflicts: "模型 ID 冲突",
-    acceptConflicts: "我确认使用当前 API 来源替换这些模型",
+    acceptConflicts: "我确认使用以上所选来源替换这些同名模型",
     confirmPublish: "发布到 {count} 个目标",
     published: "模型配置已写入",
     importSucceeded: "已从目标配置导入 {gateways} 个 API 和 {models} 个模型。",
@@ -169,6 +188,8 @@ const messages = {
     hideImportDetails: "收起详情",
     dismissImportNotice: "关闭启动导入摘要",
     importIssueTargetReadFailed: "配置文件无法读取或解析。",
+    importIssueInvalidTargetPath:
+      "配置路径不可用。请在设置中检查并重新保存绝对路径。",
     importIssueMissingModelId: "缺少 Model ID。",
     importIssueMissingUrl: "缺少 API URL。",
     importIssueInvalidUrl: "API URL 无效。",
@@ -292,9 +313,37 @@ const messages = {
     vendor: "提供商",
     updateAvailable: "EveryBuddy {version} 已可用",
     updateAndRestart: "更新并重启",
+    restartApp: "重启应用",
+    interruptedWriteRecovered:
+      "上次配置写入被中断，已恢复写入前的文件。请重新预览并发布。",
+    interruptedWriteChanged:
+      "写入中断后配置被其他程序修改，已保留外部更改。请检查配置，必要时从备份恢复。",
+    interruptedWriteFailed:
+      "上次中断的写入暂时无法恢复。请检查目标路径和权限，然后重新打开应用。",
+    updateRestartRequired: "更新已安装。请重启应用以完成更新。",
+    retry: "重试",
+    retryOpenRouter: "重新查询 OpenRouter",
+    openRouterChecking: "正在查询 OpenRouter 模型目录",
+    openRouterLookupFailed: "暂时无法查询 OpenRouter。请检查网络后重试。",
+    targetsStale:
+      "目标状态暂时无法刷新，当前显示上次读取的配置。正在自动重试。",
+    targetStateUnknown: "状态待确认",
+    backupsRefreshFailed: "配置已恢复，但备份列表刷新失败。请重新加载列表。",
   },
   en: {
     appName: "EveryBuddy",
+    currentSourceSelection: "{count} selected in this source",
+    choosePublishSources: "Choose a source for duplicate models",
+    publishSourceConflictHint:
+      "{count} Model IDs are selected from multiple API sources. Choose one source for each ID. Other entries with the same ID will not be published.",
+    continuePublishPreview: "Continue to preview",
+    globalPublishSelection:
+      "Publish across {sources} sources and {models} Model IDs, using one source per ID.",
+    publishSourceCount: "{count} sources",
+    publishSourcesSummary: "Sources and models in this publish",
+    publishSourceEmpty:
+      "No models will be published from this source. Its managed entries will be removed or replaced as shown in the preview.",
+    publishReplacementSource: "Existing: {existing}; publish using: {source}",
     appTagline: "Third-party model configuration",
     gateways: "API sources",
     addGateway: "Add API",
@@ -443,6 +492,14 @@ const messages = {
       "EveryBuddy will send 3 minimal /v1/chat/completions requests for Tool Call, Vision, and Reasoning. These requests may consume a small number of tokens.",
     runProbe: "Run 3 requests",
     targets: "Publish targets",
+    cleanupTargetModels: "Remove {count} unmatched models from {target}",
+    cleanupTargetModelsTitle: "Remove unmatched models",
+    cleanupTargetModelsConfirm:
+      "This removes {count} models that no longer match EveryBuddy from {target}, after creating a backup. Continue?",
+    cleanupTargetModelsAction: "Remove and back up",
+    targetModelsCleaned: "Removed {count} unmatched models from {target}",
+    retryRecovery: "Retry write recovery",
+    recoveringWrites: "Recovering writes",
     targetReady: "Ready",
     targetMissing: "Not detected",
     targetDrifted: "Configuration changed",
@@ -459,7 +516,7 @@ const messages = {
     unchanged: "Unchanged {count}",
     conflicts: "Model ID conflicts",
     acceptConflicts:
-      "I confirm replacing these models with the current API source",
+      "I confirm replacing these models using the sources selected above",
     confirmPublish: "Publish to {count} targets",
     published: "Model configuration written",
     importSucceeded:
@@ -476,6 +533,8 @@ const messages = {
     importIssueTargetReadFailed:
       "The configuration file could not be read or parsed.",
     importIssueMissingModelId: "The Model ID is missing.",
+    importIssueInvalidTargetPath:
+      "The configuration path is unavailable. Check and save an absolute path in Settings.",
     importIssueMissingUrl: "The API URL is missing.",
     importIssueInvalidUrl: "The API URL is invalid.",
     importIssueMissingToken: "The token is missing.",
@@ -630,6 +689,25 @@ const messages = {
     vendor: "Vendor",
     updateAvailable: "EveryBuddy {version} is available",
     updateAndRestart: "Update and restart",
+    restartApp: "Restart app",
+    interruptedWriteRecovered:
+      "An interrupted write was rolled back. Preview and publish again.",
+    interruptedWriteChanged:
+      "Configuration changed externally after an interrupted write. External changes were preserved. Check the file or restore a backup.",
+    interruptedWriteFailed:
+      "An interrupted write could not be recovered. Check target paths and permissions, then reopen the app.",
+    updateRestartRequired:
+      "The update is installed. Restart the app to finish updating.",
+    retry: "Retry",
+    retryOpenRouter: "Retry OpenRouter lookup",
+    openRouterChecking: "Checking the OpenRouter model catalog",
+    openRouterLookupFailed:
+      "OpenRouter is temporarily unavailable. Check your connection and retry.",
+    targetsStale:
+      "Target status could not be refreshed. Showing the last snapshot and retrying automatically.",
+    targetStateUnknown: "Status unavailable",
+    backupsRefreshFailed:
+      "Configuration restored, but the backup list could not be refreshed. Reload the list.",
   },
 } as const;
 

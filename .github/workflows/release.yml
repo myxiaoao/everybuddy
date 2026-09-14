@@ -128,7 +128,7 @@ jobs:
           tagName: v__VERSION__
           releaseName: EveryBuddy v__VERSION__
           releaseBody: |
-            EveryBuddy 0.1.2 improves credential handling and target workflow safety.
+            EveryBuddy 0.1.3 improves target cleanup, recovery, and workflow safety.
 
             ## Highlights
 
@@ -136,6 +136,8 @@ jobs:
             - Show the saved token when editing an API source, masked by default with an explicit visibility toggle.
             - Commit API source imports, credentials, models, and provenance atomically with clearer recovery when a token is missing.
             - Harden target preview, write, drift detection, and rollback behavior across WorkBuddy and CodeBuddy.
+            - Add confirmed cleanup for unmatched target models and in-session recovery for interrupted writes.
+            - Preserve active models across refreshes, normalize target paths, and improve localized validation guidance.
 
             ## Unsigned Installers
 

@@ -142,8 +142,14 @@ impl MarketCatalogClient {
     }
 
     pub async fn snapshot(&self) -> Option<Arc<MarketCatalogSnapshot>> {
+        self.snapshot_result(false).await.ok()
+    }
+
+    pub async fn snapshot_result(&self, retry: bool) -> CoreResult<Arc<MarketCatalogSnapshot>> {
         if !self.enabled {
-            return None;
+            return Err(CoreError::Network(
+                "The OpenRouter model catalog is unavailable".into(),
+            ));
         }
 
         let mut state = self.state.lock().await;
@@ -153,17 +159,23 @@ impl MarketCatalogClient {
         }
         if let Some(cached) = &state.cached {
             if Instant::now() < cached.expires_at {
-                return Some(Arc::clone(&cached.snapshot));
+                return Ok(Arc::clone(&cached.snapshot));
             }
         }
-        if state
-            .last_attempt
-            .is_some_and(|attempt| attempt.elapsed() < MARKET_CATALOG_RETRY_DELAY)
+        if !retry
+            && state
+                .last_attempt
+                .is_some_and(|attempt| attempt.elapsed() < MARKET_CATALOG_RETRY_DELAY)
         {
             return state
                 .cached
                 .as_ref()
-                .map(|cached| Arc::clone(&cached.snapshot));
+                .map(|cached| Arc::clone(&cached.snapshot))
+                .ok_or_else(|| {
+                    CoreError::Network(
+                        "The OpenRouter model catalog is unavailable; retry when connected".into(),
+                    )
+                });
         }
         state.last_attempt = Some(Instant::now());
 
@@ -176,12 +188,13 @@ impl MarketCatalogClient {
                     expires_at: Instant::now() + MARKET_CATALOG_TTL,
                     snapshot: Arc::clone(&snapshot),
                 });
-                Some(snapshot)
+                Ok(snapshot)
             }
-            Err(_) => state
+            Err(error) => state
                 .cached
                 .as_ref()
-                .map(|cached| Arc::clone(&cached.snapshot)),
+                .map(|cached| Arc::clone(&cached.snapshot))
+                .ok_or(error),
         }
     }
 
@@ -1089,6 +1102,39 @@ mod tests {
         });
         server_thread.join().unwrap();
         assert_eq!(requests.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn reports_unavailable_catalog_and_allows_an_explicit_retry() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/models", server.server_addr());
+        let worker = std::thread::spawn(move || {
+            server
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap()
+                .respond(tiny_http::Response::empty(503))
+                .unwrap();
+            server
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap()
+                .respond(tiny_http::Response::from_string(r#"{"data":[]}"#))
+                .unwrap();
+        });
+        let catalog = MarketCatalogClient::for_test(
+            Client::new(),
+            endpoint,
+            OPENROUTER_MODEL_URL.into(),
+            None,
+        );
+        tauri::async_runtime::block_on(async {
+            assert!(catalog.snapshot_result(false).await.is_err());
+            assert!(catalog.snapshot_result(false).await.is_err());
+            let snapshot = catalog.snapshot_result(true).await.unwrap();
+            assert!(snapshot.find("no-such-model", "custom").is_none());
+        });
+        worker.join().unwrap();
     }
 
     #[test]

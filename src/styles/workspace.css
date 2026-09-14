@@ -140,7 +140,7 @@
 .model-table__header,
 .model-row {
   display: grid;
-  grid-template-columns: 36px minmax(190px, 1fr) 116px;
+  grid-template-columns: 40px minmax(190px, 1fr) 116px;
   align-items: center;
 }
 
@@ -194,7 +194,7 @@
 .model-check {
   display: grid;
   place-items: center;
-  width: 32px;
+  width: 40px;
   height: 40px;
 }
 
@@ -447,6 +447,13 @@ input[type="checkbox"] {
 .capability-list,
 .target-list {
   display: grid;
+  gap: var(--space-2);
+  margin-block-start: var(--space-3);
+}
+
+.target-cleanup-actions {
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
   margin-block-start: var(--space-3);
 }

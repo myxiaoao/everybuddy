@@ -157,7 +157,7 @@ export function ModelList({
           className={`selection-slot${selectedCount > 0 ? " is-visible" : ""}`}
           aria-live="polite"
         >
-          <span>{t("selectedCount", { count: selectedCount })}</span>
+          <span>{t("currentSourceSelection", { count: selectedCount })}</span>
           <Button
             variant="ghost"
             size="icon-sm"

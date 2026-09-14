@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -20,6 +20,9 @@ export function useAppUpdater() {
     () => (isTauri() ? "checking" : "idle"),
   );
   const [installingUpdate, setInstallingUpdate] = useState(false);
+  const [restartRequired, setRestartRequired] = useState(false);
+  const installedRef = useRef(false);
+  const installationInFlightRef = useRef(false);
 
   const storeUpdate = useCallback(
     (update: Awaited<ReturnType<typeof check>>) => {
@@ -30,6 +33,7 @@ export function useAppUpdater() {
   );
 
   const checkForUpdates = useCallback(async () => {
+    if (installedRef.current || installationInFlightRef.current) return;
     if (!isTauri()) {
       setUpdateCheckStatus("desktop-required");
       return;
@@ -59,14 +63,23 @@ export function useAppUpdater() {
   }, [storeUpdate]);
 
   const installUpdate = useCallback(async () => {
-    if (!availableUpdate) return;
+    if (!availableUpdate || installationInFlightRef.current) return;
+    installationInFlightRef.current = true;
     setInstallingUpdate(true);
     try {
-      await availableUpdate.downloadAndInstall();
+      if (!installedRef.current) {
+        await availableUpdate.downloadAndInstall();
+        installedRef.current = true;
+        setRestartRequired(true);
+      }
       await relaunch();
     } catch (error) {
+      installationInFlightRef.current = false;
       setInstallingUpdate(false);
-      reportFrontendError("updater.install", error);
+      reportFrontendError(
+        installedRef.current ? "updater.restart" : "updater.install",
+        error,
+      );
       throw error;
     }
   }, [availableUpdate]);
@@ -76,6 +89,7 @@ export function useAppUpdater() {
     availableUpdate,
     updateCheckStatus,
     installingUpdate,
+    restartRequired,
     checkForUpdates,
     installUpdate,
   };

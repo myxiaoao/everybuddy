@@ -125,6 +125,62 @@
   overscroll-behavior: contain;
 }
 
+.publish-source-choices {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.publish-source-choices fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.publish-source-choices legend,
+.publish-source-choices code,
+.publish-source-summary code {
+  overflow-wrap: anywhere;
+}
+
+.publish-source-choices label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 48px;
+  padding: var(--space-2);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.publish-source-choices label:has(input:checked) {
+  background: var(--color-bg-selected);
+}
+.publish-source-choices label:focus-within {
+  outline: 2px solid var(--color-focus);
+}
+.publish-source-choices input {
+  flex-shrink: 0;
+  accent-color: var(--color-accent-solid);
+}
+.publish-source-choices label > span {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+.publish-source-choices strong {
+  overflow-wrap: anywhere;
+}
+.publish-source-summary {
+  display: grid;
+  gap: var(--space-3);
+}
+.publish-source-summary ul {
+  margin: var(--space-2) 0 0;
+  padding-inline-start: 20px;
+}
+
 .form-stack,
 .settings-form,
 .path-fields {

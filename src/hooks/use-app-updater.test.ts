@@ -45,6 +45,54 @@ afterEach(() => {
 });
 
 describe("useAppUpdater", () => {
+  it("retries only restart after installation has already succeeded", async () => {
+    const downloadAndInstall = vi.fn().mockResolvedValue(undefined);
+    tauriMocks.check.mockResolvedValue({
+      version: "0.2.0",
+      downloadAndInstall,
+    });
+    tauriMocks.relaunch
+      .mockRejectedValueOnce(new Error("restart failed"))
+      .mockResolvedValue(undefined);
+    const { result } = renderHook(() => useAppUpdater());
+    await waitFor(() => expect(result.current.availableUpdate).not.toBeNull());
+    await act(async () => {
+      await expect(result.current.installUpdate()).rejects.toThrow(
+        "restart failed",
+      );
+    });
+    expect(result.current.restartRequired).toBe(true);
+    expect(result.current.installingUpdate).toBe(false);
+    await act(async () => result.current.checkForUpdates());
+    await act(async () => result.current.installUpdate());
+    expect(downloadAndInstall).toHaveBeenCalledOnce();
+    expect(tauriMocks.relaunch).toHaveBeenCalledTimes(2);
+    expect(tauriMocks.check).toHaveBeenCalledOnce();
+  });
+
+  it("deduplicates concurrent install attempts", async () => {
+    let finish!: () => void;
+    const downloadAndInstall = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    tauriMocks.check.mockResolvedValue({
+      version: "0.2.0",
+      downloadAndInstall,
+    });
+    const { result } = renderHook(() => useAppUpdater());
+    await waitFor(() => expect(result.current.availableUpdate).not.toBeNull());
+    await act(async () => {
+      const first = result.current.installUpdate();
+      await result.current.installUpdate();
+      finish();
+      await first;
+    });
+    expect(downloadAndInstall).toHaveBeenCalledOnce();
+    expect(tauriMocks.relaunch).toHaveBeenCalledOnce();
+  });
   it("reads the runtime version and checks on launch", async () => {
     tauriMocks.getVersion.mockResolvedValue("0.1.2");
 

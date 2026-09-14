@@ -14,7 +14,7 @@ use crate::{
         TargetModelState, TargetSnapshot,
     },
     store::Store,
-    target::{target_inspections, TargetInspection},
+    target::{target_inspections, ConfigDocument, TargetInspection},
     target_codec::{DecodedTargetModel as ParsedEntry, ModelIdentity},
 };
 
@@ -37,6 +37,13 @@ impl<'a> TargetImportService<'a> {
     }
 
     pub fn bootstrap_import(&self) -> CoreResult<TargetImportResult> {
+        match self.import_snapshot() {
+            Err(crate::error::CoreError::Drift(_)) => self.import_snapshot(),
+            result => result,
+        }
+    }
+
+    fn import_snapshot(&self) -> CoreResult<TargetImportResult> {
         let inspections = target_inspections(self.store, self.paths)?;
         let report = self.store.import_missing_serialized(
             |gateways, models, deleted_sources, identity_key| {
@@ -59,6 +66,7 @@ impl<'a> TargetImportService<'a> {
                     context.new_models,
                 ))
             },
+            || verify_import_sources(&inspections),
         )?;
         let context = ImportContext::load(self.store)?;
         let states = target_model_states_from_inspections(&inspections, &context)?;
@@ -82,6 +90,11 @@ impl<'a> TargetImportService<'a> {
     ) -> CoreResult<()> {
         let target = inspection.status.kind;
         if !inspection.status.file_exists {
+            if let Some(error) = &inspection.status.error {
+                report
+                    .issues
+                    .push(issue(target, None, "invalidTargetPath", error.clone()));
+            }
             return Ok(());
         }
         let document = match inspection.document.as_ref() {
@@ -189,6 +202,32 @@ impl<'a> TargetImportService<'a> {
     }
 }
 
+fn verify_import_sources(inspections: &[TargetInspection]) -> CoreResult<()> {
+    use crate::{
+        error::CoreError,
+        target::{fingerprint, read_target_file, target_write_path},
+    };
+    for inspection in inspections {
+        if inspection.write_path.is_none() {
+            continue;
+        }
+        let path = std::path::Path::new(&inspection.status.path);
+        let resolved = target_write_path(path).ok();
+        let fingerprint = if path.exists() {
+            read_target_file(path).ok().map(|bytes| fingerprint(&bytes))
+        } else {
+            None
+        };
+        if resolved != inspection.write_path
+            || path.exists() != inspection.status.file_exists
+            || fingerprint != inspection.status.fingerprint
+        {
+            return Err(CoreError::Drift("Target configuration changed during import; retry after the target finishes writing".into()));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 pub fn get_target_model_states(
     store: &Store,
@@ -212,6 +251,19 @@ pub fn get_target_snapshot(
         targets,
         target_model_states,
     })
+}
+
+pub(crate) fn remove_unmatched_models(
+    store: &Store,
+    target: TargetKind,
+    document: &mut ConfigDocument,
+) -> CoreResult<usize> {
+    let context = ImportContext::load(store)?;
+    Ok(document.remove_models(|raw| {
+        ParsedEntry::parse_for_match(target, raw)
+            .map(|entry| context.exact_model_keys(&entry).len() != 1)
+            .unwrap_or(false)
+    }))
 }
 
 fn target_model_states_from_inspections(

@@ -82,6 +82,13 @@ impl<'a, R: GatewayRepository + ?Sized> GatewayService<'a, R> {
         profile: &GatewayProfile,
         replacement_token: Option<&str>,
     ) -> CoreResult<bool> {
+        use crate::input_limits::{text, ID_BYTES, NAME_BYTES, TOKEN_BYTES, URL_BYTES};
+        text(&profile.id, ID_BYTES, "API source ID")?;
+        text(&profile.name, NAME_BYTES, "API source name")?;
+        text(&profile.api_root, URL_BYTES, "API URL")?;
+        if let Some(token) = replacement_token {
+            text(token, TOKEN_BYTES, "API token")?;
+        }
         let previous = self.repository.find_gateway(&profile.id)?;
         let previous_token = previous
             .as_ref()
