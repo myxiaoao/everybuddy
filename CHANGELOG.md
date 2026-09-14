@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-09-14
+
+### Added
+
+- 增加 Target 未匹配模型清理，清理前自动创建备份并通过 journal、Drift 检查保护配置文件。
+- 增加当前会话的 pending write 恢复入口，发布、恢复或清理失败后可以直接重试恢复。
+
+### Changed
+
+- Target 路径保存前统一去除首尾空格，模型刷新后保留当前选中的模型。
+- 补齐多来源发布和模型配置校验的简体中文与 English 提示，并同步恢复与清理文档。
+
+[Unreleased]: https://github.com/myxiaoao/everybuddy/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/myxiaoao/everybuddy/compare/v0.1.2...v0.1.3
+
 ## [0.1.2] - 2026-08-31
 
 ### Added
@@ -63,7 +78,6 @@
 - 在 Gateway 刷新、模型 Probe 和配置发布期间检测并发修改，避免旧请求覆盖新状态。
 - 强化 Target 路径、Credential 来源、发布状态和备份回滚校验，避免部分失败留下不一致状态。
 
-[Unreleased]: https://github.com/myxiaoao/everybuddy/compare/v0.1.2...HEAD
 [0.1.2]: https://github.com/myxiaoao/everybuddy/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/myxiaoao/everybuddy/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/myxiaoao/everybuddy/compare/v0.1.0-alpha.1...v0.1.0

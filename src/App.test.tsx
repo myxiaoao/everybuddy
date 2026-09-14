@@ -25,7 +25,7 @@ describe("EveryBuddy workspace", () => {
       expect(screen.getAllByText("GPT-5.6").length).toBeGreaterThan(0),
     );
     expect(screen.getAllByText("Sub2API").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText("v0.1.2")).toBeInTheDocument();
+    expect(screen.getByText("v0.1.3")).toBeInTheDocument();
     expect(screen.getByText("Local Relay")).toBeInTheDocument();
     expect(screen.getAllByText("WorkBuddy").length).toBeGreaterThan(0);
     expect(screen.getAllByText("CodeBuddy").length).toBeGreaterThan(0);

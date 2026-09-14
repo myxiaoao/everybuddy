@@ -12,7 +12,7 @@ import App from "./App";
 import { api } from "./lib/api";
 
 const updater = vi.hoisted(() => ({
-  currentVersion: "0.1.2",
+  currentVersion: "0.1.3",
   availableUpdate: null as { version: string } | null,
   updateCheckStatus: "latest",
   installingUpdate: false,
