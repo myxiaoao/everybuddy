@@ -498,7 +498,7 @@ pub(crate) fn atomic_write_resolved(path: &Path, bytes: &[u8]) -> CoreResult<()>
             CoreError::Target(format!("Could not write {}: {error}", path.display()))
         })?;
     #[cfg(windows)]
-    crate::file_permissions::secure_path(&write_path).map_err(|error| {
+    crate::file_permissions::secure_path(write_path).map_err(|error| {
         CoreError::Target(format!("Could not secure {}: {error}", path.display()))
     })?;
     Ok(())
