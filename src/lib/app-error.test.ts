@@ -48,6 +48,18 @@ describe("localizedError", () => {
     });
   });
 
+  it("maps multi-source publish validation details to actionable guidance", () => {
+    expect(
+      localizedError(
+        {
+          code: "VALIDATION_ERROR",
+          message: "A publish request can contain at most 10000 models",
+        },
+        t,
+      ).title,
+    ).toBe("发布范围不完整");
+  });
+
   it("explains how to recover a missing SQLite credential", () => {
     expect(
       localizedError(

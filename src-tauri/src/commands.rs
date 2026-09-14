@@ -13,7 +13,7 @@ use crate::{
         AppSettings, BackupRecord, BootstrapData, ExecutePublishRequest, GatewayInput,
         GatewayProfile, ManagedModel, ManualModelInput, ModelUpdateInput, PreparePublishRequest,
         ProbeSummary, PublishPreview, PublishResult, SaveGatewayResult, SaveSettingsInput,
-        TargetKind, TargetSnapshot,
+        TargetCleanupResult, TargetImportIssue, TargetKind, TargetSnapshot,
     },
     publish::PublishCoordinator,
     target::{default_target_paths, target_path, target_write_path},
@@ -235,6 +235,33 @@ pub fn restore_backup(id: String, state: State<'_, AppState>) -> CommandResult<(
 }
 
 #[tauri::command]
+pub fn cleanup_unmatched_models(
+    target: TargetKind,
+    state: State<'_, AppState>,
+) -> CommandResult<TargetCleanupResult> {
+    let _mutation = lock_app_mutation(state.inner())?;
+    let settings = state
+        .store
+        .settings(default_target_paths().map_err(CommandError::from)?)
+        .map_err(CommandError::from)?;
+    let removed_count = coordinator(state.inner())
+        .cleanup_unmatched(target, &settings.target_paths)
+        .map_err(CommandError::from)?;
+    Ok(TargetCleanupResult {
+        target,
+        removed_count,
+    })
+}
+
+#[tauri::command]
+pub fn recover_pending_writes(state: State<'_, AppState>) -> CommandResult<Vec<TargetImportIssue>> {
+    let _mutation = lock_app_mutation(state.inner())?;
+    coordinator(state.inner())
+        .recover_interrupted()
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
 pub fn save_settings(
     mut input: SaveSettingsInput,
     state: State<'_, AppState>,
@@ -251,7 +278,7 @@ pub fn save_settings(
     }
     validate_selected_targets(&input.selected_targets).map_err(CommandError::from)?;
     for path in input.target_paths.values() {
-        crate::input_limits::text(path, crate::input_limits::URL_BYTES, "Target path")
+        crate::input_limits::text(path.trim(), crate::input_limits::URL_BYTES, "Target path")
             .map_err(CommandError::from)?;
     }
     if input
@@ -270,6 +297,7 @@ pub fn save_settings(
                 "Both target paths are required".into(),
             ))
         })?;
+        let raw = raw.trim();
         let absolute = crate::target::absolute_input_path(raw).map_err(CommandError::from)?;
         input
             .target_paths

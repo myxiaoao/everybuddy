@@ -18,6 +18,8 @@ import type {
   SaveGatewayResult,
   TargetKind,
   TargetImportReport,
+  TargetCleanupResult,
+  TargetImportIssue,
   TargetModelState,
   TargetSnapshot,
   TargetStatus,
@@ -78,6 +80,10 @@ export const api = {
   listBackups: (target?: TargetKind) =>
     call<BackupRecord[]>("list_backups", { target: target ?? null }),
   restoreBackup: (id: string) => call<void>("restore_backup", { id }),
+  cleanupUnmatchedModels: (target: TargetKind) =>
+    call<TargetCleanupResult>("cleanup_unmatched_models", { target }),
+  recoverPendingWrites: () =>
+    call<TargetImportIssue[]>("recover_pending_writes"),
   saveSettings: (settings: AppSettings) =>
     call<AppSettings>("save_settings", { input: settings }),
 };
@@ -344,6 +350,19 @@ async function demoCall(
     }
     case "restore_backup":
       return undefined;
+    case "cleanup_unmatched_models": {
+      const target = (args as { target: TargetKind }).target;
+      const state = demoTargetModelStates.find(
+        (item) => item.target === target,
+      );
+      const removedCount = state?.unmatchedCount ?? 0;
+      demoTargetModelStates = demoTargetModelStates.map((item) =>
+        item.target === target ? { ...item, unmatchedCount: 0 } : item,
+      );
+      return { target, removedCount } satisfies TargetCleanupResult;
+    }
+    case "recover_pending_writes":
+      return [] satisfies TargetImportIssue[];
     case "discover_models": {
       const gatewayId = String((args as { gatewayId: string }).gatewayId);
       return demoModels.filter((model) => model.gatewayId === gatewayId);

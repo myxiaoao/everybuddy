@@ -79,6 +79,7 @@ type DialogKind =
   | "backups"
   | "removeGateway"
   | "restoreBackup"
+  | "cleanupTarget"
   | "discard";
 
 function App() {
@@ -135,12 +136,16 @@ function App() {
   const [backupToRestore, setBackupToRestore] = useState<BackupRecord | null>(
     null,
   );
+  const [targetToCleanup, setTargetToCleanup] = useState<TargetKind | null>(
+    null,
+  );
   const [inspectorRevision, setInspectorRevision] = useState(0);
   const [compactView, setCompactView] = useState<WorkspaceView>("gateways");
   const [importReport, setImportReport] = useState<TargetImportReport | null>(
     null,
   );
   const [importDetailsExpanded, setImportDetailsExpanded] = useState(false);
+  const [recoveringPendingWrites, setRecoveringPendingWrites] = useState(false);
   const pendingActionRef = useRef<(() => void | Promise<void>) | null>(null);
   const targetPollErrorLoggedRef = useRef(false);
   const targetRefreshGenerationRef = useRef(0);
@@ -506,7 +511,11 @@ function App() {
         ...discovered,
       ]);
       if (selectedGatewayIdRef.current === gatewayId) {
-        setActiveKey(discovered[0]?.key ?? null);
+        setActiveKey((current) =>
+          discovered.some((model) => model.key === current)
+            ? current
+            : (discovered[0]?.key ?? null),
+        );
       }
       setGatewayConnectionStates((current) => ({
         ...current,
@@ -775,7 +784,7 @@ function App() {
       }
     } catch (caught) {
       dispatchWorkflow({ type: "publishExecutionFailed", sessionId });
-      showError(caught);
+      await showErrorAndOfferRecovery(caught);
     } finally {
       dispatchWorkflow({ type: "operationFinished" });
     }
@@ -831,9 +840,77 @@ function App() {
       if (nextStates)
         clearSelectionOverrides(new Set([...previousKeys, ...restoredKeys]));
     } catch (caught) {
-      showError(caught);
+      await showErrorAndOfferRecovery(caught);
     } finally {
       dispatchWorkflow({ type: "operationFinished" });
+    }
+  }
+
+  async function cleanupTarget(target: TargetKind) {
+    dispatchWorkflow({ type: "operationStarted" });
+    setError(null);
+    try {
+      const result = await api.cleanupUnmatchedModels(target);
+      setTargetToCleanup(null);
+      setStatusMessage({
+        key: "targetModelsCleaned",
+        values: {
+          target: displayTarget(result.target),
+          count: result.removedCount,
+        },
+      });
+      await loadTargets(true);
+    } catch (caught) {
+      await showErrorAndOfferRecovery(caught);
+    } finally {
+      dispatchWorkflow({ type: "operationFinished" });
+    }
+  }
+
+  async function recoverPendingWrites() {
+    setRecoveringPendingWrites(true);
+    dispatchWorkflow({ type: "operationStarted" });
+    setError(null);
+    try {
+      const issues = await api.recoverPendingWrites();
+      setImportReport((current) => {
+        if (!current) return null;
+        const otherIssues = current.issues.filter(
+          (issue) => !issue.code.startsWith("interruptedWrite"),
+        );
+        const nextIssues = [...otherIssues, ...issues];
+        return nextIssues.length ||
+          current.importedGatewayCount ||
+          current.importedModelCount
+          ? { ...current, issues: nextIssues }
+          : null;
+      });
+      await loadTargets(true);
+    } catch (caught) {
+      showError(caught);
+    } finally {
+      setRecoveringPendingWrites(false);
+      dispatchWorkflow({ type: "operationFinished" });
+    }
+  }
+
+  async function showErrorAndOfferRecovery(caught: unknown) {
+    showError(caught);
+    try {
+      const issues = await api.recoverPendingWrites();
+      if (!issues.length) return;
+      setImportReport((current) => ({
+        importedGatewayCount: current?.importedGatewayCount ?? 0,
+        importedModelCount: current?.importedModelCount ?? 0,
+        issues: [
+          ...(current?.issues.filter(
+            (issue) => !issue.code.startsWith("interruptedWrite"),
+          ) ?? []),
+          ...issues,
+        ],
+      }));
+    } catch (recoveryError) {
+      reportFrontendWarning("publish.recovery", recoveryError);
     }
   }
 
@@ -882,6 +959,7 @@ function App() {
   const dialogStates: Array<{ kind: DialogKind; open: boolean }> = [
     { kind: "discard", open: discardDialog },
     { kind: "restoreBackup", open: Boolean(backupToRestore) },
+    { kind: "cleanupTarget", open: Boolean(targetToCleanup) },
     { kind: "removeGateway", open: Boolean(gatewayToDelete) },
     { kind: "backups", open: backupsDialog },
     { kind: "settings", open: settingsDialog },
@@ -956,6 +1034,8 @@ function App() {
             t={t}
             onToggle={() => setImportDetailsExpanded((current) => !current)}
             onClose={() => setImportReport(null)}
+            onRecover={() => void recoverPendingWrites()}
+            recovering={recoveringPendingWrites}
           />
         ) : null}
 
@@ -1033,6 +1113,7 @@ function App() {
             selectedCount={globalModelCount}
             selectedSourceCount={publishSources.length}
             targets={targets}
+            targetModelStates={targetModelStates}
             selectedTargets={selectedTargets}
             busy={busy || selectedGatewayRefreshing}
             t={t}
@@ -1064,6 +1145,7 @@ function App() {
             }}
             targetsStale={targetsStale}
             onToggleTarget={(target) => void toggleTarget(target)}
+            onRequestCleanup={(target) => setTargetToCleanup(target)}
             onDirtyChange={handleDirtyChange}
           />
         </main>
@@ -1222,6 +1304,26 @@ function App() {
             errorNotice={dialogErrorNotice("restoreBackup")}
             onClose={() => setBackupToRestore(null)}
             onConfirm={() => void restoreBackup(backupToRestore)}
+          />
+        ) : null}
+        {targetToCleanup ? (
+          <ConfirmationDialog
+            open
+            busy={busy}
+            destructive
+            title={t("cleanupTargetModelsTitle")}
+            description={t("cleanupTargetModelsConfirm", {
+              target: displayTarget(targetToCleanup),
+              count:
+                targetModelStates.find(
+                  (state) => state.target === targetToCleanup,
+                )?.unmatchedCount ?? 0,
+            })}
+            confirmLabel={t("cleanupTargetModelsAction")}
+            t={t}
+            errorNotice={dialogErrorNotice("cleanupTarget")}
+            onClose={() => setTargetToCleanup(null)}
+            onConfirm={() => void cleanupTarget(targetToCleanup)}
           />
         ) : null}
         {discardDialog ? (

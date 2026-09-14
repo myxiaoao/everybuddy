@@ -83,6 +83,8 @@ pub fn run() {
             commands::execute_publish,
             commands::list_backups,
             commands::restore_backup,
+            commands::cleanup_unmatched_models,
+            commands::recover_pending_writes,
             commands::save_settings,
         ])
         .run(tauri::generate_context!())

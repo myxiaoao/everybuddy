@@ -14,7 +14,7 @@ use crate::{
         TargetModelState, TargetSnapshot,
     },
     store::Store,
-    target::{target_inspections, TargetInspection},
+    target::{target_inspections, ConfigDocument, TargetInspection},
     target_codec::{DecodedTargetModel as ParsedEntry, ModelIdentity},
 };
 
@@ -251,6 +251,19 @@ pub fn get_target_snapshot(
         targets,
         target_model_states,
     })
+}
+
+pub(crate) fn remove_unmatched_models(
+    store: &Store,
+    target: TargetKind,
+    document: &mut ConfigDocument,
+) -> CoreResult<usize> {
+    let context = ImportContext::load(store)?;
+    Ok(document.remove_models(|raw| {
+        ParsedEntry::parse_for_match(target, raw)
+            .map(|entry| context.exact_model_keys(&entry).len() != 1)
+            .unwrap_or(false)
+    }))
 }
 
 fn target_model_states_from_inspections(

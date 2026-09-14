@@ -124,6 +124,11 @@ export interface TargetSnapshot {
   targetModelStates: TargetModelState[];
 }
 
+export interface TargetCleanupResult {
+  target: TargetKind;
+  removedCount: number;
+}
+
 export interface TargetImportIssue {
   target: TargetKind;
   modelId: string | null;

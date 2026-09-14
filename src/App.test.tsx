@@ -838,4 +838,25 @@ describe("EveryBuddy workspace", () => {
       "password",
     );
   });
+
+  it("preserves the active model when refreshing the selected gateway", async () => {
+    const data = await api.bootstrap();
+    vi.spyOn(api, "discoverModels").mockResolvedValue(
+      data.models.filter((model) => model.gatewayId === "demo-gateway"),
+    );
+    render(<App />);
+    await screen.findAllByText("GPT-5.6");
+
+    fireEvent.click(screen.getByRole("button", { name: /Claude Sonnet 4\.5/ }));
+    expect(
+      screen.getByRole("heading", { name: "Claude Sonnet 4.5" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "刷新模型" })[0]);
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { name: "Claude Sonnet 4.5" }),
+      ).toBeInTheDocument(),
+    );
+  });
 });

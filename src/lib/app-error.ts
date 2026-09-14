@@ -83,6 +83,7 @@ export function localizedError(error: AppError, t: Translator) {
 function localizedValidationError(message: string, t: Translator) {
   const categories: Array<{
     messages: string[];
+    prefixes?: string[];
     title: Parameters<Translator>[0];
     body: Parameters<Translator>[0];
     recovery: Parameters<Translator>[0];
@@ -114,8 +115,15 @@ function localizedValidationError(message: string, t: Translator) {
     {
       messages: [
         "Select at least one model to publish",
+        "Select API sources to publish",
         "Select WorkBuddy, CodeBuddy, or both",
         "A configuration target can only be selected once",
+        "Both target paths are required",
+      ],
+      prefixes: [
+        "A publish request can contain at most ",
+        "API source IDs must be unique",
+        "Model IDs must be non-empty",
       ],
       title: "errorPublishSelectionTitle",
       body: "errorPublishSelectionMessage",
@@ -126,6 +134,11 @@ function localizedValidationError(message: string, t: Translator) {
         "Temperature must be a finite number",
         "Reasoning effort and default effort must be included in supported efforts",
         "Model name and vendor are required",
+        "One or more selected models contain invalid numeric configuration",
+        "One or more selected models use an unsupported reasoning summary",
+        "One or more custom protocol models are missing a complete request URL",
+        "One or more selected models need an OpenRouter capability refresh before publishing",
+        "One or more non-text models contain unsupported chat capabilities or parameters",
       ],
       title: "errorModelConfigTitle",
       body: "errorModelConfigMessage",
@@ -163,7 +176,11 @@ function localizedValidationError(message: string, t: Translator) {
       recovery: "errorRequiredFieldRecovery",
     },
   ];
-  const category = categories.find((item) => item.messages.includes(message));
+  const category = categories.find(
+    (item) =>
+      item.messages.includes(message) ||
+      item.prefixes?.some((prefix) => message.startsWith(prefix)),
+  );
 
   return category
     ? {

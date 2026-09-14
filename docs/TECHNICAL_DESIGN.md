@@ -244,7 +244,7 @@ WorkBuddy 与 CodeBuddy 的默认路径不同，但共用 `model_config` 和 `Co
 
 只有新建 API 来源时才导入 Target 模型，其字段覆盖名称、Vendor、Capability、Reasoning 和 Model Configuration。导入 metadata 在写入 SQLite 前递归移除 secret-like 字段。
 
-只读 `TargetModelState` 按 Target 返回 Fingerprint、`matchedModelKeys`、未匹配数量和跳过数量。「已配置」表示模型在最近一次成功读取的 Target 配置中匹配。启动、5 秒轮询、发布完成和备份恢复都会重新计算该状态；刷新失败时全局显示旧快照提示，并提供重试。轮询、发布和恢复不再次执行自动导入。
+只读 `TargetModelState` 按 Target 返回 Fingerprint、`matchedModelKeys`、未匹配数量和跳过数量。「已配置」表示模型在最近一次成功读取的 Target 配置中匹配。启动、5 秒轮询、发布完成和备份恢复都会重新计算该状态；刷新失败时全局显示旧快照提示，并提供重试。Target 存在未匹配模型时，用户可以在确认后执行清理；清理会先备份、复用条件写入和 journal，再更新 Target 状态。轮询、发布和恢复不再次执行自动导入。
 
 ## 9. 发布事务
 
@@ -266,7 +266,7 @@ WorkBuddy 与 CodeBuddy 的默认路径不同，但共用 `model_config` 和 `Co
 
 跨两个文件系统操作不存在单一原子提交。EveryBuddy 使用 Preview Fingerprint、写前二次检查、目标内原子替换和条件式补偿回滚实现可恢复的一致性。外部进程仍可在最后一次检查与原子替换之间修改文件，因此发布前备份和逐目标结果始终保留。
 
-进程中断后，下一次启动在导入前处理 journal：文件仍等于本次输出时恢复原始内容；文件仍是原始内容时不写入；外部修改则保留并提示人工检查。恢复失败的 journal 保留，并阻止新的发布或恢复覆盖它。正常发布执行期间，Dialog 不允许通过 Cancel、Escape 或关闭按钮丢弃逐目标结果。
+进程中断后，下一次启动在导入前处理 journal：文件仍等于本次输出时恢复原始内容；文件仍是原始内容时不写入；外部修改则保留并提示人工检查。恢复失败的 journal 保留，并阻止新的发布或恢复覆盖它；导入摘要提供重试恢复入口。正常发布执行期间，Dialog 不允许通过 Cancel、Escape 或关闭按钮丢弃逐目标结果。
 
 备份先登记 SQLite record，再写入文件。启动时清理未完成创建或删除操作留下的缺失文件记录；保留期清理失败会写入日志并在后续维护时重试，不使已完成的备份操作失败。恢复前必须确认备份历史路径仍是当前 Target 的实际路径，且未被另一个 Target 使用。恢复成功后的列表刷新失败单独提示，不允许把已提交的恢复误报为失败。
 
@@ -310,6 +310,8 @@ Updater 与 workspace 操作互斥。模型存在未保存编辑时先确认丢�
 | `get_target_snapshot`                 | 从同一批文件快照读取 schema、权限、Fingerprint、Drift 和模型匹配状态，不导入凭据或模型     |
 | `prepare_publish` / `execute_publish` | 执行两阶段发布                                                                             |
 | `list_backups` / `restore_backup`     | 查询和恢复备份                                                                             |
+| `cleanup_unmatched_models`            | 备份并清理指定 Target 中未匹配 EveryBuddy 的模型                                           |
+| `recover_pending_writes`              | 重试恢复仍挂起的文件写入 journal                                                           |
 | `save_settings`                       | 保存语言、主题、目标和路径                                                                 |
 
 错误使用 `{ code, message }` 返回，禁止携带请求 Header、Token 或完整响应 Body。

@@ -138,4 +138,106 @@ describe("workspace operation recovery", () => {
       ).not.toBeInTheDocument(),
     );
   });
+
+  it("confirms and runs unmatched target cleanup with a backup", async () => {
+    const cleanupTarget = vi
+      .spyOn(api, "cleanupUnmatchedModels")
+      .mockResolvedValue({ target: "codebuddy", removedCount: 1 });
+    render(<App />);
+    await screen.findAllByText("GPT-5.6");
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "清理 CodeBuddy 中 1 个未匹配模型",
+      }),
+    );
+    const confirmation = screen.getByRole("dialog", {
+      name: "清理未匹配模型",
+    });
+    expect(confirmation).toHaveTextContent("将从 CodeBuddy 配置中移除 1 个");
+    fireEvent.click(
+      within(confirmation).getByRole("button", { name: "清理并备份" }),
+    );
+
+    await waitFor(() =>
+      expect(cleanupTarget).toHaveBeenCalledWith("codebuddy"),
+    );
+    expect(document.querySelector(".live-region")).toHaveTextContent(
+      "已从 CodeBuddy 清理 1 个未匹配模型",
+    );
+  });
+
+  it("retries a failed pending write recovery in the current session", async () => {
+    const data = await api.bootstrap();
+    vi.spyOn(api, "bootstrap").mockResolvedValue({
+      ...data,
+      importReport: {
+        ...data.importReport,
+        issues: [
+          {
+            target: "workbuddy",
+            modelId: null,
+            code: "interruptedWriteFailed",
+            message: "recovery failed",
+          },
+        ],
+      },
+    });
+    const recover = vi.spyOn(api, "recoverPendingWrites").mockResolvedValue([
+      {
+        target: "workbuddy",
+        modelId: null,
+        code: "interruptedWriteRecovered",
+        message: "recovered",
+      },
+    ]);
+    render(<App />);
+    await screen.findAllByText("GPT-5.6");
+
+    fireEvent.click(screen.getByRole("button", { name: "重试恢复写入" }));
+    await waitFor(() => expect(recover).toHaveBeenCalledOnce());
+    expect(
+      screen.queryByRole("button", { name: "重试恢复写入" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers recovery after a publish failure leaves a pending write", async () => {
+    vi.spyOn(api, "executePublish").mockRejectedValue(
+      new Error("write failed"),
+    );
+    const recover = vi.spyOn(api, "recoverPendingWrites").mockResolvedValue([
+      {
+        target: "workbuddy",
+        modelId: null,
+        code: "interruptedWriteFailed",
+        message: "still pending",
+      },
+    ]);
+    render(<App />);
+    await screen.findAllByText("GPT-5.6");
+
+    fireEvent.click(screen.getByRole("button", { name: /预览并发布/ }));
+    const preview = await screen.findByRole("dialog", {
+      name: "确认配置变更",
+    });
+    fireEvent.click(
+      await within(preview).findByRole("checkbox", {
+        name: /我确认使用以上所选来源/,
+      }),
+    );
+    fireEvent.click(
+      within(preview).getByRole("button", { name: "发布到 2 个目标" }),
+    );
+
+    await waitFor(() => expect(recover).toHaveBeenCalledOnce());
+    fireEvent.click(within(preview).getByRole("button", { name: "取消" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "确认配置变更" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(
+      await screen.findByRole("button", { name: "重试恢复写入" }),
+    ).toBeInTheDocument();
+  });
 });

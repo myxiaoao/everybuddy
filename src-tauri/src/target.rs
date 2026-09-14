@@ -83,6 +83,7 @@ pub fn target_path(kind: TargetKind, paths: &HashMap<TargetKind, String>) -> Cor
 }
 
 pub fn absolute_input_path(raw: &str) -> CoreResult<PathBuf> {
+    let raw = raw.trim();
     let path = expand_home(raw)?;
     if path.is_absolute() {
         Ok(path)
@@ -372,6 +373,24 @@ impl ConfigDocument {
             .collect()
     }
 
+    pub fn remove_models<F>(&mut self, mut should_remove: F) -> usize
+    where
+        F: FnMut(&Value) -> bool,
+    {
+        let models = match self.schema {
+            TargetSchema::Array => self.root.as_array_mut().expect("array schema"),
+            TargetSchema::Wrapped => self
+                .root
+                .get_mut("models")
+                .and_then(Value::as_array_mut)
+                .expect("wrapped schema"),
+            _ => unreachable!("invalid schemas are rejected before removal"),
+        };
+        let before = models.len();
+        models.retain(|model| !should_remove(model));
+        before.saturating_sub(models.len())
+    }
+
     pub fn to_bytes(&self) -> CoreResult<Vec<u8>> {
         let mut bytes = serde_json::to_vec_pretty(&self.root)
             .map_err(|error| CoreError::Target(error.to_string()))?;
@@ -392,6 +411,12 @@ mod path_tests {
         assert!(target_path(TargetKind::Workbuddy, &paths).is_err());
         let normalized = absolute_input_path("relative/models.json").unwrap();
         assert!(normalized.is_absolute());
+        assert!(normalized.ends_with("relative/models.json"));
+    }
+
+    #[test]
+    fn trims_target_path_input_before_resolving() {
+        let normalized = absolute_input_path("  relative/models.json  ").unwrap();
         assert!(normalized.ends_with("relative/models.json"));
     }
 }

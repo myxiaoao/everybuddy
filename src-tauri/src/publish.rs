@@ -24,6 +24,7 @@ use crate::{
         atomic_write, fingerprint, read_target_file, target_path, target_write_path, ConfigDocument,
     },
     target_codec::encode_model as model_config,
+    target_import::remove_unmatched_models,
 };
 
 const BACKUP_RETENTION: usize = 10;
@@ -372,6 +373,61 @@ impl PublishCoordinator<'_> {
             };
         }
         Ok(())
+    }
+
+    pub fn cleanup_unmatched(
+        &self,
+        target: TargetKind,
+        target_paths: &HashMap<TargetKind, String>,
+    ) -> CoreResult<usize> {
+        self.store.ensure_no_pending_file_writes()?;
+        let configured_path = target_path(target, target_paths)?;
+        let write_path = target_write_path(&configured_path)?;
+        let (mut document, original) = ConfigDocument::read(&write_path)?;
+        let removed_count = remove_unmatched_models(self.store, target, &mut document)?;
+        if removed_count == 0 {
+            return Ok(0);
+        }
+        let output = document.to_bytes()?;
+        if let Some(original) = &original {
+            self.create_backup(target, &write_path, original)?;
+        }
+        let prepared = PreparedTarget {
+            kind: target,
+            configured_path: configured_path.clone(),
+            write_path,
+            original,
+            output,
+        };
+        self.store
+            .begin_file_writes(std::slice::from_ref(&prepared))?;
+        let hash = match write_and_verify(&prepared) {
+            Ok(hash) => hash,
+            Err(error) => {
+                if !matches!(error, CoreError::Drift(_)) {
+                    let _ = rollback_target(&prepared);
+                }
+                self.forget_restored_writes();
+                return Err(error);
+            }
+        };
+        if let Err(error) = self.store.save_target_state(
+            target,
+            &configured_path.to_string_lossy(),
+            Some(&hash),
+            Some(&hash),
+            "cleaned",
+        ) {
+            let rollback = rollback_target(&prepared);
+            self.forget_restored_writes();
+            return match rollback {
+                Ok(()) => Err(error),
+                Err(_) => Err(CoreError::Storage(
+                    "Could not save target cleanup state, and file recovery also failed".into(),
+                )),
+            };
+        }
+        Ok(removed_count)
     }
 
     fn create_backup(

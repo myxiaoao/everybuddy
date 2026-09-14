@@ -222,3 +222,37 @@ fn startup_reconciles_a_backup_record_interrupted_before_file_creation() {
     fixture.coordinator().recover_interrupted().unwrap();
     assert!(fixture.store.list_backups(None).unwrap().is_empty());
 }
+
+#[test]
+fn cleans_unmatched_target_models_with_a_backup_and_state_update() {
+    let fixture = Fixture::new();
+    let gateway = fixture.store.gateway("gateway").unwrap();
+    let managed = model_config(
+        &fixture.store.model("gateway::gpt-5").unwrap(),
+        &gateway,
+        "test-token",
+    );
+    let external = json!({
+        "id": "external-model",
+        "name": "External model",
+        "url": "https://other.example.com/v1",
+        "apiKey": "other-token"
+    });
+    let path = fixture.path(TargetKind::Workbuddy);
+    fs::write(&path, serde_json::to_vec_pretty(&vec![managed, external]).unwrap()).unwrap();
+
+    let removed = fixture
+        .coordinator()
+        .cleanup_unmatched(TargetKind::Workbuddy, &fixture.paths)
+        .unwrap();
+
+    assert_eq!(removed, 1);
+    assert_eq!(model_ids(&path), vec!["gpt-5"]);
+    assert_eq!(fixture.store.list_backups(None).unwrap().len(), 1);
+    assert!(fixture.store.pending_file_writes().unwrap().is_empty());
+    assert!(fixture
+        .coordinator()
+        .recover_interrupted()
+        .unwrap()
+        .is_empty());
+}

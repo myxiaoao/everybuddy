@@ -290,6 +290,13 @@ pub struct TargetSnapshot {
     pub target_model_states: Vec<TargetModelState>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetCleanupResult {
+    pub target: TargetKind,
+    pub removed_count: usize,
+}
+
 impl TargetModelState {
     pub fn empty(target: TargetKind) -> Self {
         Self {
