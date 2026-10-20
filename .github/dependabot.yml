@@ -4,10 +4,15 @@ updates:
     directory: /
     open-pull-requests-limit: 5
     schedule:
-      interval: weekly
+      interval: monthly
     labels:
       - dependencies
       - javascript
+    ignore:
+      # Tauri minor bumps must land in npm and cargo together; upgrade manually.
+      - dependency-name: "@tauri-apps/*"
+        update-types:
+          - version-update:semver-minor
     commit-message:
       prefix: chore(deps)
     groups:
@@ -28,10 +33,15 @@ updates:
     directory: /src-tauri
     open-pull-requests-limit: 3
     schedule:
-      interval: weekly
+      interval: monthly
     labels:
       - dependencies
       - rust
+    ignore:
+      # Tauri minor bumps must land in npm and cargo together; upgrade manually.
+      - dependency-name: "tauri*"
+        update-types:
+          - version-update:semver-minor
     commit-message:
       prefix: chore(deps)
     groups:
@@ -46,7 +56,7 @@ updates:
     directory: /
     open-pull-requests-limit: 3
     schedule:
-      interval: weekly
+      interval: monthly
     labels:
       - dependencies
       - github_actions
