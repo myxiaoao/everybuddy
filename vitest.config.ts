@@ -27,11 +27,12 @@ export default defineConfig({
         "src/types.ts",
         "src/vite-env.d.ts",
       ],
+      // Baseline re-measured with vitest 4 AST-aware coverage remapping.
       thresholds: {
-        statements: 80,
+        statements: 75,
         branches: 70,
         functions: 55,
-        lines: 80,
+        lines: 75,
       },
     },
   },
