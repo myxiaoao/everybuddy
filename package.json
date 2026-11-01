@@ -37,7 +37,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@lobehub/icons-static-svg": "^1.95.1",
+    "@lobehub/icons-static-svg": "^1.101.0",
     "@radix-ui/react-checkbox": "^1.4.1",
     "@radix-ui/react-dialog": "^1.3.1",
     "@radix-ui/react-slot": "^1.5.0",
@@ -46,10 +46,10 @@
     "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-log": "^2.10.1",
     "@tauri-apps/plugin-process": "^2.4.0",
-    "@tauri-apps/plugin-updater": "^2.14.0",
+    "@tauri-apps/plugin-updater": "^2.14.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "lucide-react": "^1.59.0",
+    "lucide-react": "^1.64.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "tailwind-merge": "^3.7.0"
@@ -57,7 +57,7 @@
   "devDependencies": {
     "@eslint/js": "^9.39.5",
     "@tailwindcss/vite": "^4.3.3",
-    "@tauri-apps/cli": "^2.12.3",
+    "@tauri-apps/cli": "^2.12.4",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^22.20.5",
@@ -73,8 +73,8 @@
     "prettier": "^3.9.10",
     "tailwindcss": "^4.3.3",
     "typescript": "~5.8.3",
-    "typescript-eslint": "^8.71.2",
-    "vite": "^8.3.4",
+    "typescript-eslint": "^8.72.1",
+    "vite": "^8.3.5",
     "vitest": "^4.1.12"
   }
 }
